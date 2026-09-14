@@ -1,0 +1,25 @@
+{
+  "name": "otag",
+  "version": "0.1.0",
+  "description": "The browser script behind Once Analytics. Pageviews, SPA routing, JS errors, Core Web Vitals and dataLayer events, with Google Consent Mode v2 support.",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "ARCHITECTURE.md",
+    "LICENSE"
+  ],
+  "main": "dist/otag.js",
+  "scripts": {
+    "build": "node build.js",
+    "dev": "node build.js --dev",
+    "typecheck": "tsc --noEmit",
+    "test": "node build.js && node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}
