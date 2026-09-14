@@ -1,7 +1,8 @@
 # Architecture
 
-otag is a single IIFE. No dependencies, no configuration, no build variants, and
-no request to any host other than the endpoint it derives from its own URL.
+otag is a single IIFE with no dependencies. It takes no configuration, has no
+build variants, and requests no host other than the endpoint derived from its
+own script URL.
 
 ## Lifecycle
 
@@ -32,18 +33,16 @@ CORS-simple request and avoids a preflight on every event.
 ## Identity
 
 The script has none. It writes nothing to browser storage and sends no
-identifier. Who a visitor is gets decided on the server, per the site's privacy
-mode.
+identifier; the server decides, per the site's privacy mode.
 
-This is deliberate. A client-side `sessionStorage` identifier dies with the tab,
-so every new tab would read as a new visitor and every unique count in the
-product would be inflated.
+A client-side `sessionStorage` identifier would die with the tab, making every
+new tab a new visitor and inflating unique counts.
 
 ## SPA page views
 
-A page view is sent only when `location.pathname` actually changes. SPAs call
-`replaceState` constantly for filter state and scroll restoration; counting those
-would inflate every number in the product.
+A page view is sent only when `location.pathname` changes. SPAs call
+`replaceState` frequently for filter state and scroll restoration, which would
+otherwise be counted as page views.
 
 ## Consent Mode v2
 
@@ -62,11 +61,9 @@ The observed state travels as `c` on every event. The script acts on none of it.
 Enforcement — dropping ad identifiers, choosing the privacy mode, deciding what
 to persist — happens server-side.
 
-That is deliberate. A rule implemented in the script is deployed across every
-customer site and can only ever apply to future data; the same rule on the server
-is one change, applies immediately, and applies to everything already collected.
-Since the endpoint is the site owner's own infrastructure, no third party is
-involved either way.
+A rule implemented in the script would be deployed across every site and could
+only apply to data collected after the update. The same rule on the server is a
+single change and applies to data already collected.
 
 ## Interaction capture
 
@@ -77,10 +74,9 @@ was found. Form submits send the form's id, name and action.
 Captured text is sent verbatim. Redaction is server-side, for the same reason as
 consent enforcement.
 
-Nothing about which interactions *matter* lives here. Conversions are defined
-server-side against this captured data, which means a rule written today also
-applies to everything already collected. That is why there is no client-side
-trigger system.
+Which interactions matter is not decided here. Conversions are defined
+server-side against this captured data, so a rule written today also applies to
+everything already collected. There is no client-side trigger system.
 
 ## Core Web Vitals
 
@@ -92,8 +88,7 @@ CLS nor INP means anything until the page is finished:
 - **LCP** — the latest `largest-contentful-paint` entry's `startTime`.
 - **CLS** — the running sum of `layout-shift` values, excluding shifts the
   browser flagged `hadRecentInput`, which are excluded by definition. This is the
-  simple cumulative sum, not the session-window refinement of the current spec;
-  for a script this size that tradeoff is deliberate.
+  simple cumulative sum, not the session-window refinement of the current spec.
 - **INP** — the largest `duration` among `event` entries that carry an
   `interactionId`. Entries without one are not interactions.
 
@@ -117,11 +112,11 @@ ever sent, consent default/update semantics, that the query string and captured 
 passed through untouched, the SPA path guard, click and form capture, dataLayer
 pass-through, and the Web Vitals accumulation rules above.
 
-It is deliberately not a browser test. It is the fast guard that runs on every
-build; real-browser coverage belongs in Playwright alongside it.
+It is not a browser test. Real-browser coverage belongs in Playwright alongside
+it.
 
 ## Build
 
-`build.js` produces one esbuild IIFE bundle targeting ES2018. No flags, no
-variants — every install gets the same script. `npm run build` prints raw, gzip
-and brotli sizes; brotli is what Cloudflare serves.
+`build.js` produces one esbuild IIFE bundle targeting ES2018. There are no flags
+or variants; every install gets the same script. `npm run build` prints raw, gzip
+and brotli sizes. Brotli is what Cloudflare serves.

@@ -1,7 +1,7 @@
 # otag
 
 The browser script behind [Once Analytics](https://onceanalytics.com). This is the
-only part that runs on your website, so it's the only part you need to read.
+only part that runs on your website.
 
 About 1.2KB over the wire. MIT licensed.
 
@@ -29,22 +29,20 @@ One POST per event, to your own endpoint, with short keys:
 | `i` `x` `h` `t` | element id, text, href, tag — on interactions |
 | `dl` | event properties, for dataLayer events |
 
-That is the whole payload. There is no other request, to anywhere.
+That is the whole payload, and the only request the script makes.
 
-The script makes no policy decisions. It reports what it observed — including the
-consent state — and your server decides what to keep, what to drop and how to
-identify visitors. One place to change a rule, and a change applies to data
-already collected rather than only to sites that have redeployed the script.
+The script makes no policy decisions. It reports what it observed, including the
+consent state, and the server decides what to keep, what to drop and how to
+identify visitors.
 
 ## What it stores
 
-**Nothing.** No cookies, no `localStorage`, no `sessionStorage`. The script has no
-identity of its own and never reads or writes browser storage.
+No cookies, no `localStorage`, no `sessionStorage`. The script never reads or
+writes browser storage, and has no identifier of its own.
 
-Visitors are identified on your server, under a privacy mode you choose — from a
-fully anonymous per-request identifier, through a daily-rotating hash of IP and
-user agent, to a first-party cookie if you want one. The script doesn't know or
-care which; it just reports the consent state it observed.
+Visitors are identified on the server, under one of four privacy modes: an
+anonymous per-request identifier, a daily-rotating hash of IP and user agent, a
+stable hash, or a first-party cookie.
 
 No fingerprinting, no canvas, no device enumeration.
 
@@ -60,8 +58,7 @@ No fingerprinting, no canvas, no device enumeration.
 | *your own* | anything pushed to `dataLayer`, and `gtag('event', …)` |
 
 Text captured from an element is sent as-is, up to 50 characters. Redaction
-happens server-side, where the rules can be changed without redeploying the
-script to every site.
+happens server-side.
 
 ## Install
 
@@ -69,18 +66,16 @@ script to every site.
 <script src="https://your-worker.example.com/script.js" defer></script>
 ```
 
-Nothing to configure. The endpoint is the script's own origin plus `/t`, so
-the served bytes are identical for every site.
+The endpoint is the script's own origin plus `/t`. There is nothing to
+configure, and the served bytes are identical for every site.
 
 ## Consent
 
 otag understands Google Consent Mode v2 and assumes nothing. If your CMP never
 pushes a consent command, consent is *unset* rather than denied.
 
-Whatever it observes is reported on every event as `c`. Your server enforces it —
-choosing the privacy mode for that request and deciding what to store. Because
-the endpoint is your own infrastructure, nothing reaches a third party either
-way.
+Whatever it observes is reported on every event as `c`. The server enforces it,
+choosing the privacy mode for that request and deciding what to store.
 
 ## Build
 
@@ -99,8 +94,7 @@ npm run build
 open test-site/index.html
 ```
 
-No server needed. The page swallows the requests and renders each payload as it
-happens — click things, submit the form, push to `dataLayer`, and watch what
-would have been sent.
+No server needed. The page intercepts the requests and renders each payload:
+click things, submit the form, push to `dataLayer`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail.
