@@ -1,6 +1,6 @@
 {
   "name": "otag",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The browser script behind Once Analytics. Pageviews, SPA routing, JS errors, Core Web Vitals and dataLayer events, with Google Consent Mode v2 support.",
   "license": "MIT",
   "type": "module",

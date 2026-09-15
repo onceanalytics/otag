@@ -15,7 +15,16 @@ function el(props = {}) {
   };
 }
 
-function run({ path = "/pricing", search = "", dataLayer = [] } = {}) {
+/** Math with a fixed random(), so sampling is testable. Spreading Math loses
+ *  its methods - they are non-enumerable. */
+function mathWith(random) {
+  const m = Object.create(Math);
+  m.random = () => random;
+  return m;
+}
+
+function run(opts = {}) {
+  const { path = "/pricing", search = "", dataLayer = [] } = opts;
   const sent = [];
   const handlers = { document: {}, window: {} };
   const noop = () => {};
@@ -45,7 +54,7 @@ function run({ path = "/pricing", search = "", dataLayer = [] } = {}) {
     navigator: { sendBeacon: (_u, b) => (sent.push(JSON.parse(b)), true) },
     addEventListener: (t, fn) => (handlers.window[t] = fn),
     PerformanceObserver: PerformanceObserverStub,
-    Math,
+    Math: mathWith(opts.random ?? 0),
     URL, URLSearchParams, JSON, Object, Array, console, Buffer,
   };
   win.window = win;
@@ -87,11 +96,22 @@ check("no client-side identity is ever sent", () => {
     assert.equal(k in sent[0], false, `${k} must not be in the payload`);
 });
 
-check("referrer is sent once, not on later events", () => {
+check("the referrer rides every event, whatever order they go in", () => {
+  // The dataLayer queue is drained before the page view, so this purchase is
+  // sent first. Which event the server keeps it on is the server's business.
+  const r = run({ dataLayer: [{ event: "purchase", value: 99 }] });
+  r.click(el({ tagName: "BUTTON", id: "b", textContent: "Buy" }));
+  assert.ok(r.sent.length >= 3);
+  for (const e of r.sent)
+    assert.equal(e.r, "https://news.ycombinator.com/", `${e.e} must carry the referrer`);
+});
+
+check("an SPA page view carries it too, unchanged", () => {
   const r = run();
   r.goto("/docs");
-  assert.ok(r.sent[0].r, "first event carries referrer");
-  assert.equal(r.sent[1].r, undefined, "second event must not");
+  assert.equal(r.sent[0].r, "https://news.ycombinator.com/");
+  assert.equal(r.sent[1].r, "https://news.ycombinator.com/",
+    "document.referrer does not change on a route change, so neither does this");
 });
 
 console.log("consent");
@@ -128,7 +148,7 @@ check("query string is passed through untouched", () => {
     dataLayer: [["consent", "default", { ad_storage: "denied" }]],
   });
   assert.equal(sent[0].p, "/pricing?gclid=A&fbclid=B&id=42&utm_source=news",
-    "the script must not rewrite the path — the server decides what to keep");
+    "the script must not rewrite the path - the server decides what to keep");
 });
 
 check("consent is still reported so the server can act on it", () => {
@@ -175,6 +195,23 @@ check("click on a non-interactive element is ignored", () => {
   const r = run();
   r.click(el({ tagName: "SPAN", textContent: "just text" }));
   assert.equal(r.sent.length, 1);
+});
+
+check("a long label is truncated, not dropped", () => {
+  const long = "Book a desk for next month and we will hold it for 48 hours";
+  const r = run();
+  r.click(el({ tagName: "BUTTON", textContent: long }));
+  const c = r.sent.find((e) => e.e === "click");
+  assert.ok(c, "the click must still be reported");
+  assert.equal(c.x, long.slice(0, 50));
+  assert.equal(c.x.length, 50);
+});
+
+check("a click with only a long label still reports", () => {
+  // No id, no href: x is the only thing keeping this event alive.
+  const r = run();
+  r.click(el({ tagName: "BUTTON", textContent: "x".repeat(200) }));
+  assert.equal(r.sent.filter((e) => e.e === "click").length, 1);
 });
 
 check("form submit is captured", () => {
@@ -239,12 +276,30 @@ check("a refused sendBeacon falls back instead of dropping the event", () => {
 
 console.log("web vitals");
 
+check("sampled out: no report, and no observers created", () => {
+  const r = run({ random: 0.99 });
+  r.emit("largest-contentful-paint", [{ startTime: 1200 }]);
+  r.hide();
+  assert.equal(r.sent.filter((e) => e.e === "web_vitals").length, 0);
+  assert.equal(r.sent.length, 1, "only the page view");
+});
+
+check("sampled in: the report carries the rate it was sampled at", () => {
+  const r = run({ random: 0.01 });
+  r.emit("largest-contentful-paint", [{ startTime: 1200 }]);
+  r.hide();
+  const v = r.sent.find((e) => e.e === "web_vitals");
+  assert.ok(v, "must report when sampled in");
+  assert.equal(v.dl.rate, 0.25, "the server needs to know what this was estimated from");
+});
+
+
 check("nothing is sent per observer callback", () => {
   const r = run();
   r.emit("largest-contentful-paint", [{ startTime: 1200 }]);
   r.emit("layout-shift", [{ value: 0.05, hadRecentInput: false }]);
   r.emit("event", [{ interactionId: 1, duration: 80 }]);
-  assert.equal(r.sent.length, 1, "only the page_view — vitals wait for page hide");
+  assert.equal(r.sent.length, 1, "only the page_view - vitals wait for page hide");
 });
 
 check("one event on hide, carrying all three", () => {
@@ -255,7 +310,7 @@ check("one event on hide, carrying all three", () => {
   r.hide();
   const v = r.sent.filter((x) => x.e === "web_vitals");
   assert.equal(v.length, 1, "exactly one web_vitals event");
-  assert.deepEqual(v[0].dl, { lcp: 1200, cls: 0.05, inp: 80 });
+  assert.deepEqual(v[0].dl, { lcp: 1200, cls: 0.05, inp: 80, rate: 0.25 });
 });
 
 check("CLS accumulates rather than reporting the last shift", () => {

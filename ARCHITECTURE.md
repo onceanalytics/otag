@@ -8,7 +8,7 @@ own script URL.
 
 1. Reads its own `<script>` element. The endpoint is that URL's origin plus `/t`.
 2. Installs itself in front of `window.dataLayer`, replaying anything already
-   queued and proxying every later `push` — the original `push` still runs. This
+   queued and proxying every later `push` - the original `push` still runs. This
    happens **before** the first `page_view`, so consent defaults already on the
    queue apply to it.
 3. Sends `page_view`.
@@ -21,8 +21,8 @@ own script URL.
 
 `navigator.sendBeacon`, falling back to `fetch` with `keepalive: true` and
 `credentials: "include"` so a first-party cookie mode still works. The fallback
-also covers `sendBeacon` *returning false* — which it does when the queue is full
-or the payload is too large — so a refused beacon is retried rather than silently
+also covers `sendBeacon` *returning false* - which it does when the queue is full
+or the payload is too large - so a refused beacon is retried rather than silently
 dropped. Both are
 fire-and-forget: otag never reads a response and never retries, so a failing
 endpoint cannot slow down or break the page.
@@ -58,8 +58,8 @@ values of exactly `granted` or `denied` are recorded, which filters out the
 non-signal keys a consent command may also carry (`wait_for_update`, `region`).
 
 The observed state travels as `c` on every event. The script acts on none of it.
-Enforcement — dropping ad identifiers, choosing the privacy mode, deciding what
-to persist — happens server-side.
+Enforcement - dropping ad identifiers, choosing the privacy mode, deciding what
+to persist - happens server-side.
 
 A rule implemented in the script would be deployed across every site and could
 only apply to data collected after the update. The same rule on the server is a
@@ -69,7 +69,14 @@ single change and applies to data already collected.
 
 Clicks walk up from the event target collecting `id`, trimmed text under 50
 characters, `href` and tag name, and are sent only when an interactive ancestor
-was found. Form submits send the form's id, name and action.
+was found.
+
+The listener is registered in the **capture** phase, so a handler calling
+`stopPropagation()` - routine in consent banners and SPA frameworks - cannot
+hide the click. One consequence follows from that: a click that *causes* a
+consent command runs before the command is processed, so the click on a CMP's
+own accept button carries no consent state. That is accurate rather than a
+defect; consent had not been given at the moment of the click. Form submits send the form's id, name and action.
 
 Captured text is sent verbatim. Redaction is server-side, for the same reason as
 consent enforcement.
@@ -82,31 +89,60 @@ everything already collected. There is no client-side trigger system.
 
 Accumulated during the page's life and reported **once**, on the first
 `visibilitychange` to `hidden`. Reporting per observer callback would be both
-noisy — three or more extra requests per page view — and wrong, because neither
+noisy - three or more extra requests per page view - and wrong, because neither
 CLS nor INP means anything until the page is finished:
 
-- **LCP** — the latest `largest-contentful-paint` entry's `startTime`.
-- **CLS** — the running sum of `layout-shift` values, excluding shifts the
+- **LCP** - the latest `largest-contentful-paint` entry's `startTime`.
+- **CLS** - the running sum of `layout-shift` values, excluding shifts the
   browser flagged `hadRecentInput`, which are excluded by definition. This is the
   simple cumulative sum, not the session-window refinement of the current spec.
-- **INP** — the largest `duration` among `event` entries that carry an
+- **INP** - the largest `duration` among `event` entries that carry an
   `interactionId`. Entries without one are not interactions.
 
 If none of the three were ever observed, nothing is sent. The report fires at
 most once per page, so a hide/show/hide cycle does not duplicate it.
+
+## What the script decides, and why
+
+The script reports; the server stores and interprets. A handful of decisions are
+made here anyway, and they are all the same kind: bounding volume that would
+otherwise be unbounded. None of them filter by *content*.
+
+- **Page views on path change only.** SPAs call `replaceState` continuously for
+  filter state and scroll position. Reporting each one would be hundreds of
+  requests per page. The cost is that a query-only change is invisible.
+- **Clicks only when an interactive ancestor is found**, and element text capped
+  at 50 characters. Without the first, every click anywhere on the page is an
+  event; without the second, a click near the top of the tree sends the page.
+- **`gtm.*` ignored.** GTM's own bookkeeping fires several times per page load
+  and is never a site event.
+- **`href` read from anchors only.**
+- **Web Vitals accumulated, reported once, and sampled at 25%.** They fire once
+  per page view whatever the visitor does, so they are the largest single share
+  of traffic - around 40% of the requests a typical visit makes. The decision is
+  taken before any observer is created, so an unsampled page costs nothing at
+  runtime either, and the rate travels with the event as `dl.rate` so a report
+  can say what it estimated from. Unlike most of what the server decides, an
+  unsent sample cannot be recovered later, which is why the rate is set
+  generously rather than at the 1% a large site would use.
+- **Stack traces cut at 1000 characters.**
+
+Anything that filters by content - consent enforcement, ad-identifier handling,
+redaction, which interactions count as conversions - belongs on the server, where
+one change applies to every site and to data already collected.
 
 ## dataLayer
 
 Plain objects with an `event` key are sent with the whole object as `dl`.
 `gtag('event', name, params)` is sent the same way.
 
-Any event namespaced `gtm.*` is ignored — that prefix is GTM's own bookkeeping,
+Any event namespaced `gtm.*` is ignored - that prefix is GTM's own bookkeeping,
 never a site event. Matching the namespace rather than a fixed list means GTM
 internals added in future are ignored too, without a tracker release.
 
 ## Tests
 
-`npm test` builds, then runs `test/smoke.mjs` — the built artifact against a
+`npm test` builds, then runs `test/smoke.mjs` - the built artifact against a
 minimal DOM stub under `node:vm`. It covers the wire format, that no identity is
 ever sent, consent default/update semantics, that the query string and captured text are
 passed through untouched, the SPA path guard, click and form capture, dataLayer

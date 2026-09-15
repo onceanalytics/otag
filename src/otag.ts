@@ -1,9 +1,9 @@
-// otag — the Once Analytics browser script.
+// otag - the Once Analytics browser script.
 //
 // Sends to {script origin}/t. Deliberately thin: it observes and reports, and
 // makes no policy decisions. Identity, consent enforcement, ad-identifier
 // handling and redaction all happen server-side, on infrastructure the site
-// owner controls — one place to change a rule, and changes apply to data
+// owner controls - one place to change a rule, and changes apply to data
 // already collected.
 
 (function () {
@@ -14,7 +14,7 @@
   if (!s) return;
 
   const endpoint = new URL(s.src).origin + "/t";
-  let referrer = d.referrer;
+  const referrer = d.referrer;
 
   // ── Consent ──
   // No defaults. If the site's CMP never pushes a consent command, consent is
@@ -37,10 +37,10 @@
     o.e = e;
     o.p = location.pathname + location.search;
     o.hn = location.hostname;
-    if (referrer) {
-      o.r = referrer;
-      referrer = "";
-    }
+    // Sent on every event. It is constant for the page load, and deciding which
+    // event should carry it is a server decision, not one to bake into a script
+    // deployed across every site.
+    if (referrer) o.r = referrer;
     if (sawConsent) o.c = consent;
     const body = JSON.stringify(o);
     // sendBeacon returns false when it refuses the payload (queue full, too
@@ -128,8 +128,11 @@
     while (el && el !== d) {
       if (!o.i && el.id) o.i = el.id;
       if (!o.x && el.textContent) {
+        // Truncate rather than drop. Dropping meant a button whose label ran
+        // past the limit produced no x at all, and with no id or href the whole
+        // click was then discarded by the check below.
         const t = el.textContent.trim();
-        if (t && t.length < 50) o.x = t;
+        if (t) o.x = t.length > 50 ? t.slice(0, 50) : t;
       }
       const tn = el.tagName;
       if (!interactive && (tn === "A" || tn === "BUTTON" || tn === "INPUT" || el.getAttribute?.("role") === "button")) {
@@ -176,7 +179,17 @@
   // observer callback would be both noisy (3+ requests per page view) and
   // wrong: CLS is cumulative and INP is the worst interaction, so neither
   // means anything until the page is done.
-  if (typeof PerformanceObserver !== "undefined") {
+  // Vitals fire once per page view regardless of interaction, so they are the
+  // largest single share of traffic. Sampling bounds that; it does not filter by
+  // content. The decision is made once, before any observer is created, so an
+  // unsampled page costs nothing at runtime either.
+  //
+  // Unsent samples cannot be recovered later, unlike most of what the server
+  // decides, so this is set generously. The rate travels with the event so a
+  // report can say what it was estimated from.
+  const VITALS_SAMPLE = 0.25;
+
+  if (typeof PerformanceObserver !== "undefined" && Math.random() < VITALS_SAMPLE) {
     let lcp = 0;
     let cls = 0;
     let inp = 0;
@@ -195,7 +208,7 @@
       seen = true;
     });
 
-    // Shifts within 500ms of an interaction are excluded by definition —
+    // Shifts within 500ms of an interaction are excluded by definition -
     // the browser flags them with hadRecentInput.
     observe("layout-shift", function (e) {
       if (!e.hadRecentInput) {
@@ -220,6 +233,7 @@
             lcp: Math.round(lcp),
             cls: Math.round(cls * 1000) / 1000,
             inp: Math.round(inp),
+            rate: VITALS_SAMPLE,
           },
         });
       }

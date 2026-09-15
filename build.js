@@ -1,4 +1,4 @@
-// Builds dist/otag.js — the browser script, one bundle, no configuration.
+// Builds dist/otag.js - the browser script, one bundle, no configuration.
 
 import { build } from "esbuild";
 import { writeFileSync, mkdirSync } from "node:fs";

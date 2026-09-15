@@ -24,9 +24,9 @@ One POST per event, to your own endpoint, with short keys:
 | `e` | event name |
 | `p` | path and query |
 | `hn` | hostname |
-| `r` | referrer — first event only |
+| `r` | referrer, on every event |
 | `c` | consent state, omitted entirely when no consent command was seen |
-| `i` `x` `h` `t` | element id, text, href, tag — on interactions |
+| `i` `x` `h` `t` | element id, text, href, tag - on interactions |
 | `dl` | event properties, for dataLayer events |
 
 That is the whole payload, and the only request the script makes.
@@ -54,10 +54,10 @@ No fingerprinting, no canvas, no device enumeration.
 | `click` | clicks on links, buttons, inputs and `role="button"` |
 | `form_submit` | form submissions |
 | `error` | uncaught errors and unhandled promise rejections |
-| `web_vitals` | once, when the page is hidden — LCP, CLS and INP |
+| `web_vitals` | once, when the page is hidden - LCP, CLS and INP. Sampled at 25% |
 | *your own* | anything pushed to `dataLayer`, and `gtag('event', …)` |
 
-Text captured from an element is sent as-is, up to 50 characters. Redaction
+Text captured from an element is sent as-is, truncated at 50 characters. Redaction
 happens server-side.
 
 ## Install
