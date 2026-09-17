@@ -32,16 +32,18 @@
   }
 
   // ── Send ──
-  function send(e: string, data?: Record<string, unknown>) {
-    const o: Record<string, unknown> = data || {};
-    o.e = e;
-    o.p = location.pathname + location.search;
-    o.hn = location.hostname;
+  // Two tiers, and only two. The envelope - e, p, d, r, c - is how the request
+  // is routed: the server needs all of it before it knows what the event is,
+  // because d picks the site and c decides the identity. b is what happened,
+  // under GA4's parameter names.
+  function send(e: string, b?: Record<string, unknown>) {
+    const o: Record<string, unknown> = { e, p: location.pathname + location.search, d: location.hostname };
     // Sent on every event. It is constant for the page load, and deciding which
     // event should carry it is a server decision, not one to bake into a script
     // deployed across every site.
     if (referrer) o.r = referrer;
     if (sawConsent) o.c = consent;
+    if (b) o.b = b;
     const body = JSON.stringify(o);
     // sendBeacon returns false when it refuses the payload (queue full, too
     // large). Falling through on false is what stops the event being dropped.
@@ -70,13 +72,13 @@
           updateConsent(item[2]);
         }
       } else if (item[0] === "event" && typeof item[1] === "string") {
-        send(item[1], item[2] ? { dl: item[2] } : undefined);
+        send(item[1], item[2]);
       }
       return;
     }
 
     if (typeof item === "object" && typeof item.event === "string" && !GTM_INTERNAL.test(item.event)) {
-      send(item.event, { dl: item });
+      send(item.event, item);
     }
   }
 
@@ -119,59 +121,88 @@
   w.addEventListener("popstate", nav);
 
   // ── Clicks on interactive elements ──
+  // GA4 fires click on outbound links only; this one fires on any interactive
+  // element, because which clicks matter is decided server-side here and a
+  // capture that is too broad can still be narrowed later. The parameters are
+  // GA4's all the same. No tag name is sent: GA4 has no parameter for one, and
+  // no report ever read it.
   d.addEventListener("click", function (ev: Event) {
     let el = ev.target as any;
     const o: Record<string, unknown> = {};
     let interactive = false;
-    let tag: string | null = null;
 
     while (el && el !== d) {
-      if (!o.i && el.id) o.i = el.id;
-      if (!o.x && el.textContent) {
+      if (!o.link_id && el.id) o.link_id = el.id;
+      if (!o.link_text && el.textContent) {
         // Truncate rather than drop. Dropping meant a button whose label ran
-        // past the limit produced no x at all, and with no id or href the whole
-        // click was then discarded by the check below.
+        // past the limit produced no link_text at all, and with no id or href
+        // the whole click was then discarded by the check below.
         const t = el.textContent.trim();
-        if (t) o.x = t.length > 50 ? t.slice(0, 50) : t;
+        if (t) o.link_text = t.length > 50 ? t.slice(0, 50) : t;
       }
       const tn = el.tagName;
       if (!interactive && (tn === "A" || tn === "BUTTON" || tn === "INPUT" || el.getAttribute?.("role") === "button")) {
         interactive = true;
-        tag = tn;
-        if (tn === "A") o.h = el.getAttribute("href");
+        if (tn === "A") o.link_url = el.getAttribute("href");
       }
-      if (o.i) interactive = true;
-      if (o.i && o.h) break;
+      if (o.link_id) interactive = true;
+      if (o.link_id && o.link_url) break;
       el = el.parentNode;
     }
 
-    if (interactive && (o.i || o.h || o.x)) {
-      if (tag) o.t = tag;
-      send("click", o);
+    if (interactive && (o.link_id || o.link_url || o.link_text)) send("click", o);
+  }, true);
+
+  // ── Forms ──
+  // GA4's pair: form_start on the first interaction with a form, form_submit on
+  // submit. Both carry the same three identifiers, so they describe one form.
+  const started = new WeakSet<object>();
+
+  function formData(f: any) {
+    const o: Record<string, unknown> = {};
+    if (f.id) o.form_id = f.id;
+    if (f.name) o.form_name = String(f.name);
+    if (f.getAttribute("action")) o.form_destination = f.getAttribute("action");
+    return o;
+  }
+
+  // GA4 counts form_start once per form per session. The script has no session -
+  // that is a server concept here - so it bounds what it can see: once per form
+  // per page load, and the server collapses the rest.
+  // focusin rather than input, because a form the visitor tabbed into and
+  // abandoned is exactly the one worth knowing about. An autofocused field
+  // therefore starts a form nobody touched; GA4 has the same edge.
+  d.addEventListener("focusin", function (ev: Event) {
+    let el = ev.target as any;
+    while (el && el !== d) {
+      if (el.tagName === "FORM") {
+        if (!started.has(el)) {
+          started.add(el);
+          send("form_start", formData(el));
+        }
+        return;
+      }
+      el = el.parentNode;
     }
   }, true);
 
-  // ── Form submissions ──
   d.addEventListener("submit", function (ev: Event) {
     const f = ev.target as any;
     if (!f || f.tagName !== "FORM") return;
-    const o: Record<string, unknown> = {};
-    if (f.id) o.i = f.id;
-    if (f.name) o.x = String(f.name);
-    if (f.getAttribute("action")) o.h = f.getAttribute("action");
-    o.t = "FORM";
-    send("form_submit", o);
+    send("form_submit", formData(f));
   }, true);
 
   // ── JS errors ──
+  // GA4 calls this exception, and the message parameter description. `fatal` is
+  // the third parameter it defines, and is not sent: neither an uncaught error
+  // nor a rejected promise stops a page, so the answer would be a constant false
+  // on every event.
   w.addEventListener("error", function (e: ErrorEvent) {
-    send("error", {
-      dl: { message: e.message, source: e.filename, stack: e.error?.stack?.slice(0, 1000) },
-    });
+    send("exception", { description: e.message, source: e.filename, stack: e.error?.stack?.slice(0, 1000) });
   });
 
   w.addEventListener("unhandledrejection", function (e: PromiseRejectionEvent) {
-    send("error", { dl: { message: String(e.reason).slice(0, 1000) } });
+    send("exception", { description: String(e.reason).slice(0, 1000) });
   });
 
   // ── Core Web Vitals ──
@@ -229,12 +260,10 @@
       if (d.visibilityState === "hidden" && !reported && seen) {
         reported = true;
         send("web_vitals", {
-          dl: {
-            lcp: Math.round(lcp),
-            cls: Math.round(cls * 1000) / 1000,
-            inp: Math.round(inp),
-            rate: VITALS_SAMPLE,
-          },
+          lcp: Math.round(lcp),
+          cls: Math.round(cls * 1000) / 1000,
+          inp: Math.round(inp),
+          rate: VITALS_SAMPLE,
         });
       }
     });

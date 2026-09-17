@@ -66,6 +66,9 @@ function run(opts = {}) {
     sent, win, location, handlers,
     click: (target) => handlers.document.click?.({ target }),
     submit: (target) => handlers.document.submit?.({ target }),
+    focusin: (target) => handlers.document.focusin?.({ target }),
+    error: (e) => handlers.window.error?.(e),
+    reject: (e) => handlers.window.unhandledrejection?.(e),
     goto: (p) => { location.pathname = p; win.history.pushState(); },
     emit: (type, entries) => observers[type]?.({ getEntries: () => entries }),
     hide: () => { doc.visibilityState = "hidden"; handlers.document.visibilitychange?.(); },
@@ -81,13 +84,22 @@ const check = (name, fn) => {
 
 console.log("wire format");
 
-check("page_view uses the app's short keys", () => {
+check("page_view is the envelope, and nothing else", () => {
   const { sent } = run();
   assert.equal(sent.length, 1);
-  assert.deepEqual(
-    { e: sent[0].e, p: sent[0].p, hn: sent[0].hn, r: sent[0].r },
-    { e: "page_view", p: "/pricing", hn: "site.test", r: "https://news.ycombinator.com/" }
-  );
+  assert.deepEqual(sent[0], {
+    e: "page_view", p: "/pricing", d: "site.test", r: "https://news.ycombinator.com/",
+  }, "no b: a page view has no parameters of its own");
+});
+
+check("the envelope keys are the same on every event", () => {
+  const r = run();
+  r.click(el({ tagName: "BUTTON", id: "signup" }));
+  r.win.dataLayer.push({ event: "purchase", value: 99 });
+  for (const b of r.sent)
+    assert.deepEqual(
+      Object.keys(b).filter((k) => k !== "b").sort(), ["d", "e", "p", "r"],
+      `${b.e} must carry the same envelope`);
 });
 
 check("no client-side identity is ever sent", () => {
@@ -162,7 +174,7 @@ check("consent is still reported so the server can act on it", () => {
 check("captured text is sent verbatim for the server to redact", () => {
   const r = run();
   r.click(el({ tagName: "BUTTON", id: "b", textContent: "Email michal@raczka.me" }));
-  assert.equal(r.sent[1].x, "Email michal@raczka.me");
+  assert.equal(r.sent[1].b.link_text, "Email michal@raczka.me");
 });
 
 console.log("SPA");
@@ -183,12 +195,18 @@ check("a real path change does", () => {
 
 console.log("interactions");
 
-check("click on a button is captured", () => {
+check("click on a button is captured, under GA4 parameter names", () => {
   const r = run();
   r.click(el({ tagName: "BUTTON", id: "signup", textContent: "Sign up" }));
   const c = r.sent[1];
   assert.equal(c.e, "click");
-  assert.deepEqual({ i: c.i, x: c.x, t: c.t }, { i: "signup", x: "Sign up", t: "BUTTON" });
+  assert.deepEqual(c.b, { link_id: "signup", link_text: "Sign up" });
+});
+
+check("an anchor sends its href as link_url", () => {
+  const r = run();
+  r.click(el({ tagName: "A", textContent: "Pricing", attrs: { href: "/pricing" } }));
+  assert.equal(r.sent[1].b.link_url, "/pricing");
 });
 
 check("click on a non-interactive element is ignored", () => {
@@ -203,12 +221,12 @@ check("a long label is truncated, not dropped", () => {
   r.click(el({ tagName: "BUTTON", textContent: long }));
   const c = r.sent.find((e) => e.e === "click");
   assert.ok(c, "the click must still be reported");
-  assert.equal(c.x, long.slice(0, 50));
-  assert.equal(c.x.length, 50);
+  assert.equal(c.b.link_text, long.slice(0, 50));
+  assert.equal(c.b.link_text.length, 50);
 });
 
 check("a click with only a long label still reports", () => {
-  // No id, no href: x is the only thing keeping this event alive.
+  // No id, no href: link_text is the only thing keeping this event alive.
   const r = run();
   r.click(el({ tagName: "BUTTON", textContent: "x".repeat(200) }));
   assert.equal(r.sent.filter((e) => e.e === "click").length, 1);
@@ -219,16 +237,77 @@ check("form submit is captured", () => {
   r.submit(el({ tagName: "FORM", id: "contact", name: "", attrs: { action: "/send" } }));
   const f = r.sent[1];
   assert.equal(f.e, "form_submit");
-  assert.deepEqual({ i: f.i, h: f.h, t: f.t }, { i: "contact", h: "/send", t: "FORM" });
+  assert.deepEqual(f.b, { form_id: "contact", form_destination: "/send" });
+});
+
+check("focus inside a form starts it, with the same identifiers as the submit", () => {
+  const r = run();
+  const form = el({ tagName: "FORM", id: "contact", name: "signup", attrs: { action: "/send" } });
+  r.focusin(el({ tagName: "INPUT", parentNode: form }));
+  r.submit(form);
+  const [start, submit] = r.sent.slice(1);
+  assert.equal(start.e, "form_start");
+  assert.equal(submit.e, "form_submit");
+  assert.deepEqual(start.b, { form_id: "contact", form_name: "signup", form_destination: "/send" });
+  assert.deepEqual(start.b, submit.b, "both must describe the same form");
+});
+
+check("a form starts once, however many fields are focused", () => {
+  const r = run();
+  const form = el({ tagName: "FORM", id: "contact" });
+  for (const name of ["email", "message", "email"])
+    r.focusin(el({ tagName: "INPUT", id: name, parentNode: form }));
+  assert.equal(r.sent.filter((e) => e.e === "form_start").length, 1);
+});
+
+check("each form on the page starts separately", () => {
+  const r = run();
+  for (const id of ["search", "signup"])
+    r.focusin(el({ tagName: "INPUT", parentNode: el({ tagName: "FORM", id }) }));
+  assert.deepEqual(
+    r.sent.filter((e) => e.e === "form_start").map((e) => e.b.form_id),
+    ["search", "signup"],
+  );
+});
+
+check("focus outside any form starts nothing", () => {
+  const r = run();
+  r.focusin(el({ tagName: "INPUT", id: "site-search", parentNode: el({ tagName: "DIV" }) }));
+  assert.equal(r.sent.length, 1, "only the page_view");
+});
+
+console.log("errors");
+
+check("an uncaught error is sent as exception, with GA4 parameter names", () => {
+  const r = run();
+  r.error({ message: "boom", filename: "/app.js", error: { stack: "at f (/app.js:1)" } });
+  const e = r.sent[1];
+  assert.equal(e.e, "exception");
+  assert.equal(e.b.description, "boom");
+  assert.equal(e.b.source, "/app.js");
+  assert.equal(e.b.stack, "at f (/app.js:1)");
+});
+
+check("an unhandled rejection is sent as exception", () => {
+  const r = run();
+  r.reject({ reason: "nope" });
+  assert.equal(r.sent[1].e, "exception");
+  assert.equal(r.sent[1].b.description, "nope");
+});
+
+check("a stack is cut at 1000 characters", () => {
+  const r = run();
+  r.error({ message: "boom", filename: "/app.js", error: { stack: "x".repeat(4000) } });
+  assert.equal(r.sent[1].b.stack.length, 1000);
 });
 
 console.log("dataLayer");
 
-check("plain object events pass through as dl", () => {
+check("plain object events pass through as the body", () => {
   const r = run();
   r.win.dataLayer.push({ event: "purchase", value: 99 });
   assert.equal(r.sent[1].e, "purchase");
-  assert.equal(r.sent[1].dl.value, 99);
+  assert.equal(r.sent[1].b.value, 99);
 });
 
 check("GTM internal events are ignored", () => {
@@ -290,7 +369,7 @@ check("sampled in: the report carries the rate it was sampled at", () => {
   r.hide();
   const v = r.sent.find((e) => e.e === "web_vitals");
   assert.ok(v, "must report when sampled in");
-  assert.equal(v.dl.rate, 0.25, "the server needs to know what this was estimated from");
+  assert.equal(v.b.rate, 0.25, "the server needs to know what this was estimated from");
 });
 
 
@@ -310,7 +389,7 @@ check("one event on hide, carrying all three", () => {
   r.hide();
   const v = r.sent.filter((x) => x.e === "web_vitals");
   assert.equal(v.length, 1, "exactly one web_vitals event");
-  assert.deepEqual(v[0].dl, { lcp: 1200, cls: 0.05, inp: 80, rate: 0.25 });
+  assert.deepEqual(v[0].b, { lcp: 1200, cls: 0.05, inp: 80, rate: 0.25 });
 });
 
 check("CLS accumulates rather than reporting the last shift", () => {
@@ -319,7 +398,7 @@ check("CLS accumulates rather than reporting the last shift", () => {
   r.emit("layout-shift", [{ value: 0.05, hadRecentInput: false }]);
   r.emit("layout-shift", [{ value: 0.02, hadRecentInput: false }]);
   r.hide();
-  assert.equal(r.sent.at(-1).dl.cls, 0.17, "sum of the shifts, not the last one");
+  assert.equal(r.sent.at(-1).b.cls, 0.17, "sum of the shifts, not the last one");
 });
 
 check("shifts after recent input are excluded", () => {
@@ -327,7 +406,7 @@ check("shifts after recent input are excluded", () => {
   r.emit("layout-shift", [{ value: 0.1, hadRecentInput: false }]);
   r.emit("layout-shift", [{ value: 0.9, hadRecentInput: true }]);
   r.hide();
-  assert.equal(r.sent.at(-1).dl.cls, 0.1);
+  assert.equal(r.sent.at(-1).b.cls, 0.1);
 });
 
 check("INP is the worst interaction, not the most recent", () => {
@@ -335,7 +414,7 @@ check("INP is the worst interaction, not the most recent", () => {
   r.emit("event", [{ interactionId: 1, duration: 200 }]);
   r.emit("event", [{ interactionId: 2, duration: 40 }]);
   r.hide();
-  assert.equal(r.sent.at(-1).dl.inp, 200);
+  assert.equal(r.sent.at(-1).b.inp, 200);
 });
 
 check("event entries without an interactionId are not interactions", () => {
@@ -343,7 +422,7 @@ check("event entries without an interactionId are not interactions", () => {
   r.emit("event", [{ duration: 500 }]);
   r.emit("event", [{ interactionId: 3, duration: 30 }]);
   r.hide();
-  assert.equal(r.sent.at(-1).dl.inp, 30);
+  assert.equal(r.sent.at(-1).b.inp, 30);
 });
 
 check("LCP takes the latest entry", () => {
@@ -351,7 +430,7 @@ check("LCP takes the latest entry", () => {
   r.emit("largest-contentful-paint", [{ startTime: 800 }]);
   r.emit("largest-contentful-paint", [{ startTime: 2100 }]);
   r.hide();
-  assert.equal(r.sent.at(-1).dl.lcp, 2100);
+  assert.equal(r.sent.at(-1).b.lcp, 2100);
 });
 
 check("reported once, not again on a later hide", () => {

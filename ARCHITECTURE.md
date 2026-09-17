@@ -13,9 +13,32 @@ own script URL.
    queue apply to it.
 3. Sends `page_view`.
 4. Wraps `history.pushState` / `replaceState` and listens for `popstate`.
-5. Listens for clicks, form submits, errors and unhandled rejections.
+5. Listens for clicks, form focus and submits, errors and unhandled
+   rejections.
 6. Observes `largest-contentful-paint`, `layout-shift` and `event`, accumulating
    Web Vitals for a single report when the page is hidden.
+
+## Wire format
+
+Two tiers, and only two.
+
+The **envelope** - `e`, `p`, `d`, `r`, `c` - is how the request is routed. All of
+it is needed before the event name means anything: `d` selects the site, `c`
+decides which identity mode applies. It keeps short keys because it is transport,
+not data.
+
+**`b`** is what happened, under GA4's parameter names, spelled out. A click's
+`link_url` and a pushed `purchase`'s `value` arrive the same way and are stored
+the same way, because they are the same kind of thing: which of them counts as a
+conversion is a reporting decision made later, against everything already
+collected.
+
+Before 0.3 there was a third tier - `i`, `x`, `h`, `t` alongside the envelope for
+interactions, `dl` for everything else - which cost a key that meant element text
+on `click` and the form's name on `form_submit`. Collapsing it removed that
+ambiguity, removed the tag name nothing read, and removed the branch in the
+worker that chose between the two shapes. It costs about 20 bytes on an
+interaction beacon and nothing on a page view.
 
 ## Transport
 
@@ -76,7 +99,7 @@ The listener is registered in the **capture** phase, so a handler calling
 hide the click. One consequence follows from that: a click that *causes* a
 consent command runs before the command is processed, so the click on a CMP's
 own accept button carries no consent state. That is accurate rather than a
-defect; consent had not been given at the moment of the click. Form submits send the form's id, name and action.
+defect; consent had not been given at the moment of the click.
 
 Captured text is sent verbatim. Redaction is server-side, for the same reason as
 consent enforcement.
@@ -84,6 +107,23 @@ consent enforcement.
 Which interactions matter is not decided here. Conversions are defined
 server-side against this captured data, so a rule written today also applies to
 everything already collected. There is no client-side trigger system.
+
+## Forms
+
+`form_start` and `form_submit`, GA4's pair, both carrying the form's id, name and
+action so they describe the same form.
+
+`form_start` fires on the first `focusin` inside a form, once per form per page
+load. Focus rather than input, because a form the visitor tabbed into and
+abandoned is exactly the one worth knowing about - waiting for a keystroke would
+lose every abandonment before the first character. The cost is an autofocused
+field, which starts a form nobody touched; GA4's own implementation has the same
+edge.
+
+Once per *page load* rather than GA4's once per session: the script has no
+session - that is a server concept here, reconstructed from the event stream -
+so it bounds what it can see and the server collapses the rest. A visitor who
+starts a form, navigates away and comes back sends two.
 
 ## Core Web Vitals
 
@@ -117,12 +157,15 @@ otherwise be unbounded. None of them filter by *content*.
 - **`gtm.*` ignored.** GTM's own bookkeeping fires several times per page load
   and is never a site event.
 - **`href` read from anchors only.**
+- **`form_start` once per form per page load.** Every focus into a form would
+  otherwise be an event, and a visitor moving between three fields would start
+  the same form three times.
 - **Web Vitals accumulated, reported once, and sampled at 25%.** They fire once
   per page view whatever the visitor does, so they are the largest single share
   of traffic - around 40% of the requests a typical visit makes. The decision is
   taken before any observer is created, so an unsampled page costs nothing at
-  runtime either, and the rate travels with the event as `dl.rate` so a report
-  can say what it estimated from. Unlike most of what the server decides, an
+  runtime either, and the rate travels with the event so a report
+  can say what it estimated from as `b.rate`. Unlike most of what the server decides, an
   unsent sample cannot be recovered later, which is why the rate is set
   generously rather than at the 1% a large site would use.
 - **Stack traces cut at 1000 characters.**
@@ -133,8 +176,10 @@ one change applies to every site and to data already collected.
 
 ## dataLayer
 
-Plain objects with an `event` key are sent with the whole object as `dl`.
-`gtag('event', name, params)` is sent the same way.
+Plain objects with an `event` key are sent with the whole object as `b`, and
+`gtag('event', name, params)` sends its params the same way. A site that already
+names its events as GA4 does therefore needs to change nothing, and its
+parameters sit beside otag's own under the same rules.
 
 Any event namespaced `gtm.*` is ignored - that prefix is GTM's own bookkeeping,
 never a site event. Matching the namespace rather than a fixed list means GTM
@@ -145,7 +190,8 @@ internals added in future are ignored too, without a tracker release.
 `npm test` builds, then runs `test/smoke.mjs` - the built artifact against a
 minimal DOM stub under `node:vm`. It covers the wire format, that no identity is
 ever sent, consent default/update semantics, that the query string and captured text are
-passed through untouched, the SPA path guard, click and form capture, dataLayer
+passed through untouched, the SPA path guard, click capture, the form_start /
+form_submit pair and its once-per-form guard, exception reporting, dataLayer
 pass-through, and the Web Vitals accumulation rules above.
 
 It is not a browser test. Real-browser coverage belongs in Playwright alongside
