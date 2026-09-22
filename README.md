@@ -1,7 +1,15 @@
 # otag
 
-The browser script behind [Once Analytics](https://onceanalytics.com). This is the
-only part that runs on your website.
+Open-source JS tracking script, alternative to GA4 gtag/js or gtm.js.
+Tracks `page_view` and a number of default events like `click` or `form_submit`.
+
+Supports custom events via `dataLayer` and is not setting or using any cookies by default.
+
+Comes with a collection endpoint that runs as a Cloudflare Worker and stores raw events in D1.
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/onceanalytics/otag/tree/main/worker)
+
+Use the button above to get your tracker live, and use a SQL client or agent to query your D1 data directly.
 
 About 1.3KB over the wire. MIT licensed.
 
@@ -47,8 +55,9 @@ No cookies, no `localStorage`, no `sessionStorage`. The script never reads or
 writes browser storage, and has no identifier of its own.
 
 Visitors are identified on the server, under one of four privacy modes: an
-anonymous per-request identifier, a daily-rotating hash of IP and user agent, a
-stable hash, or a first-party cookie.
+anonymous per-request identifier, a daily-rotating hash, a stable hash, or a
+first-party cookie. Every hashed mode includes the site, so two sites never share
+an identity.
 
 No fingerprinting, no canvas, no device enumeration.
 
@@ -75,8 +84,8 @@ have to learn a second vocabulary:
 - [Enhanced measurement events](https://support.google.com/analytics/answer/9216061?hl=en)
 - [Recommended events](https://support.google.com/analytics/answer/9267735?hl=en)
 
-otag does not implement those lists, and is not trying to. The rule is narrower:
-whatever it does send uses GA4's name for it rather than a synonym of our own.
+otag sends a small subset of those events, and uses GA4's name for whatever it
+sends rather than a synonym.
 `page_view`, `click`, `form_start` and `form_submit` are enhanced measurement
 events, `exception` is GA4's name for a JS error, and what a site pushes to
 `dataLayer` passes through under its own name, so a `purchase` or a `login`
@@ -122,6 +131,85 @@ plain snake_case name that collides with neither if they do not.
 The endpoint is the script's own origin plus `/t`. There is nothing to
 configure, and the served bytes are identical for every site.
 
+## The endpoint
+
+`worker/` is a Cloudflare Worker that serves the script, takes the events and
+writes them to a D1 database. It has no dashboard and no reports: the data is
+read with SQL, by a client or an agent, through a D1 read token.
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/onceanalytics/otag/tree/main/worker)
+
+The button creates the Worker and its database in your own Cloudflare account,
+runs the migration and deploys. It asks for nothing: the salt for the visitor
+hash is generated on the first request and kept in the database, and sites name
+themselves.
+
+| Route | |
+|---|---|
+| `GET /` | installation instructions, the event count, and queries to copy |
+| `GET /script.js` | the script above |
+| `POST /t` | one event, one row |
+| `GET`, `POST /optout` | the opt-out cookie |
+
+### One endpoint, any number of sites
+
+`site_id` is the hostname the page was served from, lowercased and without a
+leading `www.` or a port. `example.com`, `www.example.com` and
+`www.example.com:8443` are one site; `blog.example.com` is another. The endpoint's
+own hostname is used only when an event arrives without one, which otag never
+does.
+
+So the same script tag on five sites fills one database with five `site_id`
+values, and none of them has to be configured. Once Analytics resolves the same
+value from the same field, which is what makes moving there exact rather than
+approximate.
+
+Visitors are identified by `SHA-256(ip | user-agent | site | date | salt)`, which
+is the only mode here. Once Analytics has four and picks per site; with one there
+is no setting to read, so an event costs one insert and no query.
+
+The site is in the hash, so two of your sites in one database never share an
+identity: the same person on both, on the same day, is two unrelated hashes. The
+date rotates it at midnight UTC, and the salt is generated on first use and kept
+in the database.
+
+### Reading it
+
+```sql
+SELECT date(created_at) AS day, COUNT(*) AS views
+FROM events
+WHERE site_id = 'example.com'
+  AND event_name = 'page_view' AND is_bot = 0
+  AND created_at >= datetime('now', '-30 days')
+GROUP BY day ORDER BY day;
+```
+
+Hashes rotate at UTC midnight, so `COUNT(DISTINCT visitor_hash)` counts people
+within one day and visitor-days across several, per site. There are no sessions in the
+table; grouping events into visits is a query, and different queries will
+disagree.
+
+On Cloudflare's free plan, going over the daily D1 read allowance blocks every
+query on the account, **including the insert on this endpoint**, until 00:00 UTC.
+An agent looping thirty-day scans reaches that limit quickly, so filter on
+`created_at`. The free plan writes 100,000 rows a day, about 23,000 pageviews
+with the one index this ships with.
+
+### Running it locally
+
+```bash
+cd worker
+npm install
+npx wrangler d1 migrations apply DB --local
+npx wrangler dev
+```
+
+### Leaving it
+
+The `events` table matches [Once Analytics](https://onceanalytics.com) column for
+column, so moving to the paid product points a different worker at the same
+database. Nothing is exported and nothing is re-collected.
+
 ## Consent
 
 otag understands Google Consent Mode v2 and assumes nothing. If your CMP never
@@ -139,6 +227,12 @@ npm run dev        # unminified
 npm run typecheck
 npm test           # builds, then runs the behaviour suite
 ```
+
+`npm run build` also writes `worker/src/otag.generated.ts`, the same bytes as a
+string, because a Worker cannot read a file at runtime and Cloudflare builds
+`worker/` on its own. It is committed. `npm run check:generated` rebuilds and
+fails if the committed copy has drifted, which is what CI runs. `npm run dev`
+leaves it alone, so unminified output never reaches it.
 
 ## Try it
 

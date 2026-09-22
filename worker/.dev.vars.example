@@ -1,0 +1,2 @@
+# Nothing to set. The salt is generated on first request and kept in the
+# database, so a fresh deploy needs no secrets.

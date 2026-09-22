@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "otag",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+
+  // Deploy to Cloudflare creates this database and fills in the id. The binding
+  // name is what `npm run deploy` passes to `wrangler d1 migrations apply`, so
+  // renaming it means changing that script too.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "otag-events",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+
+  "observability": { "enabled": true }
+}

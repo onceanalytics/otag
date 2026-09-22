@@ -1,7 +1,7 @@
 {
   "name": "otag",
   "version": "0.3.0",
-  "description": "The browser script behind Once Analytics. Pageviews, SPA routing, forms, JS exceptions, Core Web Vitals and dataLayer events, under GA4 event names, with Google Consent Mode v2 support.",
+  "description": "The browser script behind Once Analytics, and a Cloudflare Worker that collects what it sends into your own D1. Pageviews, SPA routing, forms, JS exceptions, Core Web Vitals and dataLayer events, under GA4 event names, with Google Consent Mode v2 support.",
   "license": "MIT",
   "type": "module",
   "files": [
@@ -16,7 +16,8 @@
     "build": "node build.js",
     "dev": "node build.js --dev",
     "typecheck": "tsc --noEmit",
-    "test": "node build.js && node test/smoke.mjs"
+    "test": "node build.js && node test/smoke.mjs",
+    "check:generated": "node build.js && git diff --exit-code worker/src/otag.generated.ts"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
