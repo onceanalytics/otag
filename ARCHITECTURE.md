@@ -40,6 +40,32 @@ ambiguity, removed the tag name nothing read, and removed the branch in the
 worker that chose between the two shapes. It costs about 20 bytes on an
 interaction beacon and nothing on a page view.
 
+## Where otag differs from GA4
+
+Event and parameter names follow GA4's, so the differences are worth stating rather
+than discovering.
+
+`p` and `d` are GA4's `page_location` split in two and `r` is `page_referrer`; the
+envelope keeps short keys because it is transport, not data.
+
+- **`click` fires on any interactive element**, where GA4's fires only on outbound
+  links. Which clicks matter is a server decision here, and a broad capture can still
+  be narrowed later.
+- **`form_start` is once per form per page load**, where GA4 counts it once per form
+  per *session*. The script has no session, so the server collapses them.
+- **`web_vitals` has no GA4 equivalent.** Google's own web-vitals library sends one
+  event per metric; otag sends one report per page.
+- **`exception` carries `description`, `source` and `stack`**, and not GA4's `fatal`.
+  Neither an uncaught error nor a rejected promise stops a page, so it would be a
+  constant `false` on every event.
+- **No element tag name on `click`.** GA4 has no parameter for one and no report read
+  it.
+
+A new event takes its name from GA4's [enhanced measurement](https://support.google.com/analytics/answer/9216061?hl=en)
+or [recommended events](https://support.google.com/analytics/answer/9267735?hl=en)
+list if either has one for it, and a plain snake_case name that collides with neither
+if they do not.
+
 ## Transport
 
 `navigator.sendBeacon`, falling back to `fetch` with `keepalive: true` and
