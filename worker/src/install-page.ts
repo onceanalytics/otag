@@ -178,7 +178,7 @@ WHERE is_bot = 0 AND date(created_at) = date('now');</code></pre>
       across several.</li>
 </ul>
 
-<footer><a href="https://onceanalytics.com/">onceanalytics.com</a></footer>
+<footer><a href="https://github.com/onceanalytics/otag">github.com/onceanalytics/otag</a></footer>
 
 </body></html>`;
 
