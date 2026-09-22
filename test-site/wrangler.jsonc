@@ -1,0 +1,19 @@
+// The demo page from the README, deployed as a static site.
+//
+// It lives here rather than at the repo root so that `wrangler deploy` in the
+// root cannot reach it, and the name differs from the collector in `worker/`
+// so the two can never overwrite each other.
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "otag-test-site",
+  "compatibility_date": "2026-09-22",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "."
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}

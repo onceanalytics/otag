@@ -1,9 +1,9 @@
 /**
  * The install page, served at /.
  *
- * It is an installation check and a set of queries to copy, not a dashboard.
- * Two numbers: how many events have arrived, and when the last one did. Adding
- * a third is how this becomes a dashboard, which is the paid product.
+ * An installation check and a set of queries to copy, not a dashboard. Two
+ * numbers: how many events have arrived, and when the last one did. Adding a
+ * third is how this becomes a dashboard, which is the paid product.
  *
  * The page is public: the event count is visible to anybody who opens the
  * endpoint's root.
@@ -32,8 +32,14 @@ async function readStatus(db: D1Database): Promise<Status> {
 }
 
 export async function installPage(request: Request, env: Env): Promise<Response> {
-  const origin = new URL(request.url).origin;
+  const url = new URL(request.url);
+  const origin = url.origin;
   const status = await readStatus(env.DB);
+
+  // On workers.dev the script and its beacons are cross-site from the tracked
+  // page, which is the pattern content blockers match. This is the default
+  // state after a one-click deploy, so it is said here rather than in the docs.
+  const isWorkersDev = url.hostname.endsWith('.workers.dev');
 
   const html = `<!doctype html>
 <html lang="en"><head>
@@ -42,68 +48,86 @@ export async function installPage(request: Request, env: Env): Promise<Response>
 <meta name="robots" content="noindex">
 <title>otag</title>
 <style>
-  :root { --bg:#F6F3ED; --ink:#1F211D; --muted:#75786E; --border:#DFDACE; --live:#E09411; --teal:#145148; }
-  * { box-sizing:border-box; margin:0; padding:0 }
-  body { background:var(--bg); color:var(--ink); padding:48px 24px 96px;
-         font:16px/1.6 ui-sans-serif,system-ui,sans-serif; -webkit-font-smoothing:antialiased }
-  main { max-width:760px; margin:0 auto }
-  h1 { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:34px; letter-spacing:-.02em }
-  h2 { font-size:15px; text-transform:uppercase; letter-spacing:.14em; color:var(--muted);
-       margin:48px 0 14px; font-weight:600 }
-  p { margin:0 0 14px; max-width:68ch }
-  a { color:var(--teal) }
-  pre { background:#fff; border:1px solid var(--border); border-radius:8px; padding:16px 18px;
-        overflow-x:auto; font:14px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace; margin:0 0 16px }
-  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace }
-  .status { display:flex; align-items:center; gap:12px; margin:22px 0 8px;
-            font:15px/1 ui-monospace,SFMono-Regular,Menlo,monospace }
+  :root { --bg:#F6F3ED; --ink:#1F211D; --muted:#6B6E64; --border:#DFDACE;
+          --code:#FBFAF7; --live:#E09411; --link:#145148; }
+  * { box-sizing:border-box }
+  body { margin:0 auto; padding:40px 20px 80px; max-width:800px; background:var(--bg);
+         color:var(--ink); line-height:1.55; font-size:16px;
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+         -webkit-font-smoothing:antialiased }
+  h1 { font-size:2em; margin:0 0 16px; padding-bottom:.3em; border-bottom:1px solid var(--border) }
+  h2 { font-size:1.4em; margin:32px 0 16px; padding-bottom:.3em; border-bottom:1px solid var(--border) }
+  p { margin:0 0 16px }
+  a { color:var(--link) }
+  code { background:rgba(31,33,29,.06); padding:.2em .4em; border-radius:6px; font-size:85%;
+         font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:6px;
+        padding:16px; overflow:auto; line-height:1.45; font-size:85%;
+        font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+  pre code { background:none; padding:0; font-size:100% }
+  ul { margin:0 0 16px; padding-left:24px }
+  li { margin:4px 0 }
+  .status { display:flex; align-items:center; gap:10px; margin:0 0 24px; font-size:15px }
   .dot { width:10px; height:10px; border-radius:50%; flex:none;
-         background:${status.total > 0 ? 'var(--live)' : 'var(--border)'};
-         box-shadow:${status.total > 0 ? '0 0 0 4px rgba(224,148,17,.18)' : 'none'} }
+         background:${status.total > 0 ? 'var(--live)' : 'var(--border)'} }
   .muted { color:var(--muted) }
-  .note { border-left:2px solid var(--border); padding-left:16px; color:var(--muted); margin:0 0 16px }
+  .note { border-left:4px solid var(--live); background:rgba(224,148,17,.08);
+          padding:12px 16px; border-radius:0 6px 6px 0; margin:0 0 24px }
+  .note.tip { border-left-color:var(--link); background:rgba(20,81,72,.06) }
+  .note p:last-child { margin:0 }
+  footer { margin-top:56px; padding-top:24px; border-top:1px solid var(--border);
+           text-align:center; font-size:15px }
 </style>
-</head><body><main>
+</head><body>
 
 <h1>otag</h1>
-<p class="muted">Collecting into your own D1 database. Nothing else runs here.</p>
 
-<div class="status"><span class="dot"></span>
 ${
   status.ready
-    ? `<span>${status.total.toLocaleString('en-US')} events</span>
-       <span class="muted">${status.last ? `last at ${status.last} UTC` : 'none yet'}</span>`
-    : `<span>Database not initialised</span>`
+    ? `<div class="status"><span class="dot"></span>
+       <span>${status.total.toLocaleString('en-US')} events</span>
+       <span class="muted">${status.last ? `last at ${status.last} UTC` : 'none yet'}</span>
+       </div>`
+    : `<div class="note"><p><strong>Database not initialised.</strong> The <code>events</code>
+       table is missing. Run <code>npx wrangler d1 migrations apply DB --remote</code> from the
+       <code>worker</code> directory.</p></div>`
 }
-</div>
+
 ${
-  status.ready
-    ? ''
-    : `<p class="note">The <code>events</code> table is missing. Run
-       <code>npx wrangler d1 migrations apply DB --remote</code> from the
-       <code>worker</code> directory.</p>`
+  isWorkersDev
+    ? `<div class="note tip"><p><strong>This is a <code>workers.dev</code> address.</strong>
+       otag works best served from the domain it tracks: on a shared address the script and its
+       requests are third-party, which is what content blockers match. Add a custom domain such
+       as <code>analytics.yourdomain.com</code>, on a domain in your Cloudflare account.</p></div>`
+    : ''
 }
 
 <h2>Add the script</h2>
-<pre>&lt;script src="${origin}/script.js" defer&gt;&lt;/script&gt;</pre>
-<p>One tag, on every page. It posts to <code>${origin}/t</code>, which it works
-out from its own <code>src</code>, so there is nothing to configure.</p>
-<p>The same tag on several sites is fine. Each event records the hostname it came
-from as <code>site_id</code>, lowercased and without <code>www.</code> or a port,
-so the sites separate themselves and nothing needs listing here.</p>
+
+<pre><code>&lt;script src="${origin}/script.js" defer&gt;&lt;/script&gt;</code></pre>
+
+<p>One tag, on every page. It posts to <code>${origin}/t</code>, worked out from its own
+<code>src</code>.</p>
+
+<p>The same tag on several sites is fine. Each event records the hostname it came from as
+<code>site_id</code>, lowercased and without <code>www.</code> or a port, so the sites separate
+themselves.</p>
 
 <h2>Read it with SQL</h2>
-<p>Create an API token with <strong>D1 Read</strong> permission, and find the
-database id under Workers &amp; Pages → D1 in the Cloudflare dashboard. Then:</p>
-<pre>API=https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1
+
+<p>Create an API token with <strong>D1 Read</strong> permission, and find the database id under
+Workers &amp; Pages &rarr; D1 in the Cloudflare dashboard.</p>
+
+<pre><code>API=https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1
 
 curl -X POST "$API/database/$DATABASE_ID/query" \\
   -H "Authorization: Bearer $D1_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{"sql":"SELECT COUNT(*) FROM events"}'</pre>
+  -d '{"sql":"SELECT COUNT(*) FROM events"}'</code></pre>
 
-<h2>Queries to start from</h2>
-<pre>-- which sites are landing here
+<h2>Queries</h2>
+
+<pre><code>-- which sites are landing here
 SELECT site_id, COUNT(*) AS events, MAX(created_at) AS last
 FROM events GROUP BY site_id ORDER BY events DESC;
 
@@ -138,37 +162,25 @@ GROUP BY event_name ORDER BY n DESC;
 -- visitors on one day
 SELECT COUNT(DISTINCT visitor_hash) AS visitors
 FROM events
-WHERE is_bot = 0 AND date(created_at) = date('now');</pre>
+WHERE is_bot = 0 AND date(created_at) = date('now');</code></pre>
 
-<h2>What the data will not tell you</h2>
-<p><strong>Visitor hashes rotate at UTC midnight.</strong> They are
-<code>SHA-256(ip | user-agent | site | date | salt)</code>, so counting distinct
-hashes works within one day and not across several. A 30-day
-<code>COUNT(DISTINCT visitor_hash)</code> counts visitor-days, not people.</p>
-<p><strong>There are no sessions.</strong> Events carry timestamps and a daily
-identity; grouping them into visits is something a query does, and different
-queries will disagree.</p>
-<p><strong>Your sites do not share identities.</strong> The site is part of the
-hash, so one person visiting two of them on the same day appears as two unrelated
-hashes. Counting per site is exactly right; counting people across sites is not
-something this data can do.</p>
+<h2>Limits</h2>
 
-<h2>Limits worth knowing before you query a lot</h2>
-<p>On Cloudflare's free plan, going over the daily D1 read allowance blocks
-every query on the account, <strong>including the insert on this endpoint</strong>.
-Collection stops until 00:00 UTC. An agent looping thirty-day scans is the
-quickest way there, so filter on <code>created_at</code> and select the columns
-you need.</p>
-<p class="muted">Free plan: 5,000,000 rows read and 100,000 rows written a day,
-which is roughly 23,000 pageviews a day with the index this ships with. Above
-that, Cloudflare's paid plan is $5 a month for the whole account.</p>
+<ul>
+  <li>Cloudflare's free plan allows 5,000,000 rows read and 100,000 rows written a day.
+      Going over either blocks every D1 query on the account until 00:00 UTC,
+      <strong>including the insert on this endpoint</strong>. Filter on
+      <code>created_at</code>.</li>
+  <li>100,000 rows written is about 23,000 pageviews a day with the index this ships with.
+      Above that, Cloudflare's paid plan is $5 a month for the whole account.</li>
+  <li><code>visitor_hash</code> rotates at 00:00 UTC, so
+      <code>COUNT(DISTINCT visitor_hash)</code> counts people within one day and visitor-days
+      across several.</li>
+</ul>
 
-<h2>When you want reports instead of queries</h2>
-<p><a href="https://onceanalytics.com">Once Analytics</a> reads this same
-database. The <code>events</code> table is the same table, so upgrading points
-a different worker at the data you already have.</p>
+<footer><a href="https://onceanalytics.com/">onceanalytics.com</a></footer>
 
-</main></body></html>`;
+</body></html>`;
 
   return new Response(html, {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },

@@ -17,10 +17,13 @@
     "dev": "node build.js --dev",
     "typecheck": "tsc --noEmit",
     "test": "node build.js && node test/smoke.mjs",
-    "check:generated": "node build.js && git diff --exit-code worker/src/otag.generated.ts"
+    "check:generated": "node build.js && git diff --exit-code worker/src/otag.generated.ts",
+    "test-site:dev": "wrangler dev -c test-site/wrangler.jsonc",
+    "test-site:deploy": "wrangler deploy -c test-site/wrangler.jsonc"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "wrangler": "^4.136.2"
   }
 }

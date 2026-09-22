@@ -243,6 +243,8 @@ npm test           # builds, then runs test/smoke.mjs against a DOM stub
 npm run check:generated
 
 npm run build && open test-site/index.html    # no server; renders each payload
+npm run test-site:dev                        # or serve it with wrangler
+npm run test-site:deploy                     # deploys it as "otag-test-site"
 ```
 
 `npm run build` also writes `worker/src/otag.generated.ts`, the script as a string: a
