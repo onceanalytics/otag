@@ -139,7 +139,8 @@ visitor_hash = SHA-256(ip | user-agent | site_id | date | salt), first 16 hex ch
 
 ### Schema
 
-Two tables, defined in `worker/migrations/0001_init.sql`. One index:
+Two tables, defined in `worker/migrations/` (`0001_init.sql`, then `0002_request_context.sql`
+adds the last four columns). One index:
 `idx_events_site_created (site_id, created_at)`. `meta` holds a single row, `hash_salt`.
 
 `events`:
@@ -159,6 +160,10 @@ Two tables, defined in `worker/migrations/0001_init.sql`. One index:
 | `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content` | parsed from the query string |
 | `event_data` | JSON of `b`. Null for `page_view` |
 | `created_at` | `datetime('now')`, UTC |
+| `in_app` | the app whose in-app browser opened the page (`whatsapp`, `instagram`, `facebook`, `messenger`, `tiktok`, `linkedin`, `line`, `snapchat`, ...), from user agent tokens. Null for a normal browser. The user agent itself is never stored |
+| `city` | Cloudflare's `request.cf.city` |
+| `lang` | primary subtag of the first `Accept-Language` entry, lowercase (`pl`). Null when the header is missing |
+| `dc` | `1` when the request came from a cloud or hosting network (a short ASN list, see `worker/src/ingest-context.ts`), `0` when not, null when Cloudflare gave no network data |
 
 ### Querying
 
