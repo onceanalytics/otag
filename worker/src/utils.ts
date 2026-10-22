@@ -7,6 +7,21 @@
  */
 
 /**
+ * True for a hostname that cannot be a public website: events from it are dropped, so a developer's
+ * localhost or a dev preview never becomes a site. Covers localhost and *.localhost, any bare IP
+ * address (so 127/8, ::1, 0.0.0.0, 10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7 and fe80::/10
+ * are all included), and the reserved or local-only names *.local, *.internal, *.test, *.example,
+ * *.invalid. Only those suffixes: example.com is a real hostname and is kept.
+ * Same rule as Once Analytics (src/instance.ts), so both stay consistent.
+ */
+export function isLocalHostname(raw: unknown): boolean {
+  const host = String(raw ?? '').trim().toLowerCase().replace(/\.$/, '').replace(/^\[(.*)\]/, '$1').replace(/:\d+$/, '');
+  if (!host) return false;
+  if (host.includes(':') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;
+  return /(^|\.)(localhost|local|internal|test|example|invalid)$/.test(host);
+}
+
+/**
  * A hostname reduced to the one string that names a site.
  *
  * Lowercased, without a port, without a leading `www.` and without a trailing

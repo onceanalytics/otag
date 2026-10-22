@@ -7,6 +7,7 @@
  */
 
 import {
+  isLocalHostname,
   normaliseHostname,
   generateVisitorHash,
   cleanReferrer,
@@ -105,6 +106,12 @@ export async function handleTrack(request: Request, env: Env): Promise<Response>
   // listed on one of its sites. There is no list here, so whatever arrives is
   // written: it is your account and your rows.
   const endpointHost = normaliseHostname(new URL(request.url).hostname);
+
+  // Local and dev pages (or, with no `d`, a local endpoint) are answered as usual so the page
+  // shows no error, but nothing is stored: they must never become sites.
+  if (isLocalHostname(pageHostname ?? new URL(request.url).hostname)) {
+    return json({ ok: true, ignored: true }, 200, origin);
+  }
   const siteId = normaliseHostname(pageHostname) || endpointHost;
 
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
