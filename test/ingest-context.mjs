@@ -41,4 +41,16 @@ assert.equal(m.detectAutomation(req({ "User-Agent": CHROME, "Sec-CH-UA": CH, "Se
 assert.equal(m.detectAutomation(req({ "User-Agent": CHROME })), "Spoofed UA", "a plain Chrome UA without client hints");
 assert.equal(m.detectAutomation(req({ "User-Agent": FB })), null, "in-app browsers are never judged by missing hints");
 
+// link_url as stored: the real addresses clicks sent, query and fragment cut.
+const CF = "https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22d1%22%7D%5D&accountId=0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+assert.equal(m.linkAddress(CF), "https://dash.cloudflare.com/profile/api-tokens");
+assert.equal(m.linkAddress("mailto:contact@getrelight.dev?subject=Hello"), "mailto:contact@getrelight.dev");
+assert.equal(m.linkAddress("/en/coworking/?utm_source=x"), "/en/coworking/");
+assert.equal(m.linkAddress("tel:+48600100200"), "tel:+48600100200");
+assert.deepEqual(m.storedEventData({ link_id: "cta", link_text: "Create a token", link_url: CF }),
+  { link_id: "cta", link_text: "Create a token", link_url: "https://dash.cloudflare.com/profile/api-tokens" });
+assert.deepEqual(m.storedEventData({ link_text: "Top", link_url: "#top" }), { link_text: "Top" }, "nothing left of the address");
+assert.deepEqual(m.storedEventData({ value: 99, currency: "USD" }), { value: 99, currency: "USD" }, "other events untouched");
+assert.equal(m.storedEventData(undefined), undefined);
+
 console.log("ingest-context: ok");

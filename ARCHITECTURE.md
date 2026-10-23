@@ -118,9 +118,22 @@ single change and applies to data already collected.
 
 ## Interaction capture
 
-Clicks walk up from the event target collecting `id`, trimmed text under 50
-characters, `href` and tag name, and are sent only when an interactive ancestor
-was found.
+Clicks walk up from the event target collecting the first `id`, and are sent
+when a control (a link, button, form field, `<summary>`, or an ARIA button,
+link, tab or menu item) or an element with an id was found. From 0.3.2:
+
+- `link_text` is a control's own label: the first text from the target up to
+  the control, capped at 50 characters. A click that hit no control (a swipe
+  in `section#galeria`) sends the id alone; the text there is whatever content
+  was under the pointer.
+- A form field sends its id alone: an `<input>`, `<select>`, `<textarea>`,
+  `<label>`, an ARIA text box, combo box or list box, an editable area, or a
+  control holding one. A `<select>`'s text is every option it offers, and the
+  text around an input is its label and help text.
+- `link_url` is the anchor's `href` without its query string or `#fragment`.
+  The worker cuts it the same way before storing (`storedEventData` in
+  worker/src/ingest-context.ts), so pages running an older cached script are
+  covered too.
 
 The listener is registered in the **capture** phase, so a handler calling
 `stopPropagation()` - routine in consent banners and SPA frameworks - cannot
@@ -129,8 +142,9 @@ consent command runs before the command is processed, so the click on a CMP's
 own accept button carries no consent state. That is accurate rather than a
 defect; consent had not been given at the moment of the click.
 
-Captured text is sent verbatim. Redaction is server-side, for the same reason as
-consent enforcement.
+Captured text is otherwise sent verbatim. Redaction is server-side, for the same
+reason as consent enforcement. The form field and link address rules above are
+the exception: what never leaves the page cannot leak.
 
 Which interactions matter is not decided here. Conversions are defined
 server-side against this captured data, so a rule written today also applies to
@@ -179,9 +193,10 @@ otherwise be unbounded. None of them filter by *content*.
 - **Page views on path change only.** SPAs call `replaceState` continuously for
   filter state and scroll position. Reporting each one would be hundreds of
   requests per page. The cost is that a query-only change is invisible.
-- **Clicks only when an interactive ancestor is found**, and element text capped
-  at 50 characters. Without the first, every click anywhere on the page is an
-  event; without the second, a click near the top of the tree sends the page.
+- **Clicks only when a control or an id is found**, and element text capped
+  at 50 characters and taken from the control only. Without the first, every
+  click anywhere on the page is an event; without the second, a click near the
+  top of the tree sends the page.
 - **`gtm.*` ignored.** GTM's own bookkeeping fires several times per page load
   and is never a site event.
 - **`href` read from anchors only.**

@@ -129,31 +129,57 @@
   // capture that is too broad can still be narrowed later. The parameters are
   // GA4's all the same. No tag name is sent: GA4 has no parameter for one, and
   // no report ever read it.
+  //
+  // A click counts when it hits a control (a link, button, form field,
+  // <summary> or an ARIA button, link, tab or menu item) or anything inside an
+  // element with an id. link_text is only ever a control's own label: a click
+  // that hit no control (a gallery swipe inside section#galeria) sends its id
+  // alone, because the text there is whatever content was under the finger.
+  // A form field sends its id alone too: a <select>'s text is every option it
+  // offers, and the text around an input is its label and help text, neither
+  // of which is the visitor's action. link_url is the href without its query
+  // string or #fragment, where sites put account ids and prefilled subjects.
+  const CONTROL = /^(A|BUTTON|SUMMARY|INPUT|SELECT|TEXTAREA)$/;
+  const CONTROL_ROLE = /^(button|link|tab|menuitem)$/;
+  const FIELD = /^(INPUT|SELECT|TEXTAREA|OPTION|LABEL)$/;
+  const FIELD_ROLE = /^(textbox|searchbox|combobox|listbox|option)$/;
   d.addEventListener("click", function (ev: Event) {
     let el = ev.target as any;
     const o: Record<string, unknown> = {};
-    let interactive = false;
+    let text = "";
+    let control = false;
+    let field = false;
 
     while (el && el !== d) {
       if (!o.link_id && el.id) o.link_id = el.id;
-      if (!o.link_text && el.textContent) {
-        // Truncate rather than drop. Dropping meant a button whose label ran
-        // past the limit produced no link_text at all, and with no id or href
-        // the whole click was then discarded by the check below.
-        const t = el.textContent.trim();
-        if (t) o.link_text = t.length > 50 ? t.slice(0, 50) : t;
+      // Below the control, and the control itself: the only place a label can come from.
+      if (!control) {
+        const tn = el.tagName;
+        const role = el.getAttribute?.("role") || "";
+        if (FIELD.test(tn) || FIELD_ROLE.test(role) || el.isContentEditable) field = true;
+        if (!text && el.textContent) {
+          // Truncate rather than drop. Dropping meant a button whose label ran
+          // past the limit produced no link_text at all, and with no id or href
+          // the whole click was then discarded by the check below.
+          const t = el.textContent.trim();
+          if (t) text = t.length > 50 ? t.slice(0, 50) : t;
+        }
+        if (CONTROL.test(tn) || CONTROL_ROLE.test(role)) {
+          control = true;
+          // A custom control wrapping a real field (a styled select) is a field.
+          if (el.querySelector?.("input,select,textarea")) field = true;
+          if (tn === "A") {
+            const href = (el.getAttribute("href") || "").split(/[?#]/)[0];
+            if (href) o.link_url = href;
+          }
+        }
       }
-      const tn = el.tagName;
-      if (!interactive && (tn === "A" || tn === "BUTTON" || tn === "INPUT" || el.getAttribute?.("role") === "button")) {
-        interactive = true;
-        if (tn === "A") o.link_url = el.getAttribute("href");
-      }
-      if (o.link_id) interactive = true;
-      if (o.link_id && o.link_url) break;
+      if (o.link_id && control) break;
       el = el.parentNode;
     }
 
-    if (interactive && (o.link_id || o.link_url || o.link_text)) send("click", o);
+    if (control && !field && text) o.link_text = text;
+    if ((control || o.link_id) && (o.link_id || o.link_url || o.link_text)) send("click", o);
   }, true);
 
   // ── Forms ──

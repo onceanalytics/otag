@@ -16,7 +16,7 @@ import {
   detectBot,
   redactSensitiveParams,
 } from './utils';
-import { detectAutomation, ingestContext } from './ingest-context';
+import { detectAutomation, ingestContext, storedEventData } from './ingest-context';
 
 const OPT_OUT_COOKIE = 'oa_optout';
 
@@ -160,7 +160,8 @@ export async function handleTrack(request: Request, env: Env): Promise<Response>
         utm.utmCampaign,
         utm.utmTerm,
         utm.utmContent,
-        eventName === 'page_view' || !eventData ? null : JSON.stringify(eventData),
+        // link_url without its query string or fragment (storedEventData).
+        eventName === 'page_view' || !eventData ? null : JSON.stringify(storedEventData(eventData)),
         context.inApp,
         context.city,
         context.lang,

@@ -232,6 +232,166 @@ check("a click with only a long label still reports", () => {
   assert.equal(r.sent.filter((e) => e.e === "click").length, 1);
 });
 
+// A small DOM: textContent is every descendant's text joined, as in a browser,
+// so an ancestor's text really is its label, help text and options together.
+function h(tagName, attrs = {}, ...children) {
+  const node = {
+    tagName: tagName.toUpperCase(), id: attrs.id ?? "", parentNode: null, children: [],
+    isContentEditable: attrs.contenteditable === "true",
+    getAttribute: (a) => attrs[a] ?? null,
+    get textContent() { return this.children.map((c) => typeof c === "string" ? c : c.textContent).join(""); },
+    querySelector(sel) {
+      const tags = sel.split(",").map((t) => t.trim().toUpperCase());
+      for (const c of this.children) {
+        if (typeof c === "string") continue;
+        if (tags.includes(c.tagName)) return c;
+        const deep = c.querySelector(sel);
+        if (deep) return deep;
+      }
+      return null;
+    },
+  };
+  for (const c of children) {
+    node.children.push(c);
+    if (typeof c !== "string") c.parentNode = node;
+  }
+  return node;
+}
+const clicked = (r) => r.sent.filter((e) => e.e === "click").map((e) => e.b);
+
+// Once Analytics installer, DomainSelectionStep: a labelled <select> of the
+// customer's Cloudflare zones. 0.3.1 sent the options as link_text ("Select a
+// domainakademiaprzyszlosci.org.plbiedansk."). Domains here are stand-ins.
+function zoneStep() {
+  const select = h("select", { id: "zone" },
+    h("option", { value: "" }, "Select a domain"),
+    h("option", { value: "z1" }, "akademia-example.org.pl"),
+    h("option", { value: "z2" }, "bieda-example.pl"));
+  const label = h("label", { for: "zone", class: "label" }, "Domain");
+  h("div", { class: "mb-6" }, label, select);
+  return { select, label, option: select.children[1] };
+}
+
+// Installer, TokenInputStep: label, password input, help text in one wrapper.
+// 0.3.1 sent the wrapper's text: label and help text run together.
+function tokenStep() {
+  const input = h("input", { type: "password", id: "cfToken", placeholder: "Paste your token here" });
+  const label = h("label", { for: "cfToken" }, "Cloudflare API token");
+  const help = h("p", { class: "help" }, "Used for this installation only. It is never stored.");
+  h("div", { class: "mb-6" }, label, input, help);
+  return { input, label, help };
+}
+
+// konkret.studio site template (swidrowachata.pl), section#galeria: grid tiles
+// are buttons with only an aria-label and a picture; the lightbox has a caption,
+// icon-only prev/next buttons, a slide counter, and the photo list as JSON.
+function galeria() {
+  const tileImg = h("img", { alt: "Jasny salon z beżowymi fotelami" });
+  const tile = h("button", { type: "button", class: "gallery-card", "aria-label": "Powiększ zdjęcie: Jasny salon" }, h("picture", {}, tileImg));
+  const photo = h("img", { class: "gallery-dialog__img", alt: "Jacuzzi na zadaszonym tarasie obok stołu z krzesłami" });
+  const caption = h("figcaption", { class: "gallery-dialog__caption" }, "Jacuzzi na zadaszonym tarasie obok stołu z krzesłami");
+  const nextPath = h("path", { d: "M9 5l7 7-7 7" });
+  const next = h("button", { type: "button", class: "gallery-dialog__btn gallery-dialog__next", "aria-label": "Następne zdjęcie" }, h("svg", { "aria-hidden": "true" }, nextPath));
+  const count = h("span", { class: "gallery-dialog__count", "aria-live": "polite" }, "2 / 10");
+  h("section", { class: "sw-gallery sw-section", id: "galeria" },
+    h("div", { class: "sw-wrap" },
+      h("p", { class: "sw-kicker" }, "Galeria"),
+      h("div", { class: "gallery" },
+        h("ul", { class: "gallery-grid", role: "list" }, h("li", { class: "gallery-item" }, tile)),
+        h("dialog", { class: "gallery-dialog" }, h("figure", {}, photo, caption), next, count),
+        h("script", { type: "application/json" }, '[{"src":"/_astro/05.DRu4Ta9L_Zq59rj.webp","alt":"Jasny salon"}]'))));
+  return { tileImg, photo, caption, nextPath, count };
+}
+
+check("a <select> sends its id, never its options", () => {
+  const r = run(); const z = zoneStep();
+  r.click(z.select);
+  r.click(z.option); // Firefox targets the <option>
+  assert.deepEqual(clicked(r), [{ link_id: "zone" }, { link_id: "zone" }]);
+});
+
+check("a label with no id is not a click of its own", () => {
+  // The browser follows it with a click on the field, which is reported.
+  const r = run();
+  r.click(zoneStep().label);
+  r.click(tokenStep().label);
+  assert.deepEqual(clicked(r), []);
+});
+
+check("an input sends its id, not the label and help text around it", () => {
+  const r = run(); const t = tokenStep();
+  r.click(t.input);
+  assert.deepEqual(clicked(r), [{ link_id: "cfToken" }]);
+});
+
+check("a label wrapping its input sends the label's id only", () => {
+  const help = h("small", {}, "One email a month, unsubscribe any time.");
+  const box = h("input", { type: "checkbox", name: "nl" });
+  h("form", { action: "/subscribe" }, h("label", { id: "newsletter" }, "Send me the newsletter ", box, help));
+  const r = run();
+  r.click(help);
+  r.click(box);
+  assert.deepEqual(clicked(r), [{ link_id: "newsletter" }, { link_id: "newsletter" }]);
+});
+
+check("an editable area sends its id, never what was typed in it", () => {
+  const p = h("p", { contenteditable: "true" }, "Dear team, my phone is 600 100 200");
+  h("div", { id: "message", contenteditable: "true" }, p);
+  const r = run();
+  r.click(p);
+  assert.deepEqual(clicked(r), [{ link_id: "message" }]);
+});
+
+check("a click on content inside an id counts, with the id alone", () => {
+  // Swipes on the lightbox photo, the slide counter, the caption.
+  const r = run(); const g = galeria();
+  r.click(g.photo);
+  r.click(g.count);
+  r.click(g.caption);
+  assert.deepEqual(clicked(r), [{ link_id: "galeria" }, { link_id: "galeria" }, { link_id: "galeria" }]);
+});
+
+check("a button's label is its own text, never its surroundings", () => {
+  // The grid tile and the next arrow have no text: 0.3.1 sent the section's
+  // text instead (the photo list JSON, or caption and counter run together).
+  const r = run(); const g = galeria();
+  r.click(g.tileImg);
+  r.click(g.nextPath);
+  assert.deepEqual(clicked(r), [{ link_id: "galeria" }, { link_id: "galeria" }]);
+});
+
+check("a link's text and address are kept, without query or fragment", () => {
+  const r = run();
+  const links = [
+    ["https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=0f1e2d3c4b5a69788796a5b4c3d2e1f0&name=Once%20Analytics", "Create a token", "https://dash.cloudflare.com/profile/api-tokens"],
+    ["mailto:contact@getrelight.dev?subject=Once%20Analytics%20question", "contact@getrelight.dev", "mailto:contact@getrelight.dev"],
+    ["/en/coworking/?utm_source=x#plans", "Coworking", "/en/coworking/"],
+    ["tel:+48600100200", "Zadzwoń", "tel:+48600100200"],
+  ];
+  for (const [href, text] of links) {
+    const span = h("span", {}, text);
+    h("nav", {}, h("a", { href }, span));
+    r.click(span);
+  }
+  assert.deepEqual(clicked(r), links.map(([, text, url]) => ({ link_text: text, link_url: url })));
+});
+
+check("an in-page link has no address to send", () => {
+  const a = h("a", { href: "#galeria" }, "Galeria");
+  h("nav", { id: "menu" }, a);
+  const r = run();
+  r.click(a);
+  assert.deepEqual(clicked(r), [{ link_id: "menu", link_text: "Galeria" }]);
+});
+
+check("an id inside a link does not hide the link's address", () => {
+  const span = h("span", { id: "cta" }, "Book a desk");
+  h("a", { href: "/en/coworking/book?plan=day" }, span);
+  const r = run();
+  r.click(span);
+  assert.deepEqual(clicked(r), [{ link_id: "cta", link_text: "Book a desk", link_url: "/en/coworking/book" }]);
+});
+
 check("form submit is captured", () => {
   const r = run();
   r.submit(el({ tagName: "FORM", id: "contact", name: "", attrs: { action: "/send" } }));

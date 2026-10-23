@@ -2,7 +2,8 @@
  * Request context stored per event: in-app browser, city, language, a
  * datacenter flag and the network (ASN). Also the automation check that
  * reads the same request: a browser driven by a script, or one claiming to be
- * something else.
+ * something else. And the one rule both apply to a click's parameters before
+ * they are stored: link_url loses its query string and fragment.
  *
  * This file exists twice, byte for byte: in Once Analytics (src/ingest-context.ts)
  * and in otag (worker/src/ingest-context.ts). Both write the same events table,
@@ -208,4 +209,32 @@ export function detectAutomation(request: Request, webdriver?: unknown): string 
   const plain = PLAIN_CHROMIUM_UA.exec(ua);
   if (!ch && plain && Number(plain[1]) >= 90) return 'Spoofed UA';
   return null;
+}
+
+/**
+ * A link's address without its query string or #fragment. The address says
+ * where the link goes; the query is where sites put what a click should not
+ * keep: account ids in a dashboard deep link, a prefilled mailto: subject,
+ * utm_* tags on an internal link. mailto: and tel: keep their address, and a
+ * relative link keeps its path. A link that was only a fragment or a query
+ * ("#top", "?page=2") has no address left, and the result is empty.
+ */
+export function linkAddress(url: string): string {
+  const cut = url.search(/[?#]/);
+  return cut === -1 ? url : url.slice(0, cut);
+}
+
+/**
+ * Event parameters as they are stored: link_url cut to linkAddress, and
+ * dropped when nothing is left. Done here rather than only in the browser
+ * script, so pages still running a cached older script are covered too.
+ * Everything else is kept as it arrived.
+ */
+export function storedEventData<T>(data: T): T {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const url = (data as Record<string, unknown>).link_url;
+  if (typeof url !== 'string') return data;
+  const { link_url: _, ...rest } = data as Record<string, unknown>;
+  const address = linkAddress(url);
+  return (address ? { ...rest, link_url: address } : rest) as T;
 }

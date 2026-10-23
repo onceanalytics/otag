@@ -77,7 +77,7 @@ The domain has to be on Cloudflare.
 | Event | When |
 |---|---|
 | `page_view` | page load, and when an SPA changes path |
-| `click` | clicks on links, buttons, inputs and `role="button"` |
+| `click` | clicks on links, buttons, form fields, `<summary>` and ARIA buttons, links, tabs and menu items, and on anything inside an element with an id |
 | `form_start` | first focus inside a form, once per form per page |
 | `form_submit` | form submissions |
 | `exception` | uncaught errors and unhandled promise rejections |
