@@ -16,7 +16,7 @@ import {
   detectBot,
   redactSensitiveParams,
 } from './utils';
-import { ingestContext } from './ingest-context';
+import { detectAutomation, ingestContext } from './ingest-context';
 
 const OPT_OUT_COOKIE = 'oa_optout';
 
@@ -37,6 +37,7 @@ interface TrackingPayload {
   d?: string;
   r?: string;
   b?: Record<string, unknown>;
+  w?: number; // 1 when navigator.webdriver was true
 }
 
 /**
@@ -122,7 +123,11 @@ export async function handleTrack(request: Request, env: Env): Promise<Response>
   const visitorHash = await generateVisitorHash(ip, userAgent, siteId, salt);
 
   const ua = parseUserAgent(userAgent);
-  const bot = detectBot(userAgent);
+  // A known bot by its user agent, else a browser driven by a script or
+  // claiming to be another one (ingest-context.ts, shared with Once Analytics).
+  const uaBot = detectBot(userAgent);
+  const automation = uaBot.isBot ? null : detectAutomation(request, payload.w);
+  const bot = automation ? { isBot: true, botName: automation } : uaBot;
   const context = ingestContext(request);
 
   // A referrer from one of the site's own pages is navigation, not a source.
@@ -135,8 +140,8 @@ export async function handleTrack(request: Request, env: Env): Promise<Response>
 
   try {
     await env.DB.prepare(
-      `INSERT INTO events (site_id, visitor_hash, event_name, page_path, referrer, country, browser, os, device, is_bot, privacy_mode, utm_source, utm_medium, utm_campaign, utm_term, utm_content, event_data, in_app, city, lang, dc)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO events (site_id, visitor_hash, event_name, page_path, referrer, country, browser, os, device, is_bot, privacy_mode, utm_source, utm_medium, utm_campaign, utm_term, utm_content, event_data, in_app, city, lang, dc, asn)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         siteId,
@@ -159,7 +164,8 @@ export async function handleTrack(request: Request, env: Env): Promise<Response>
         context.inApp,
         context.city,
         context.lang,
-        context.dc
+        context.dc,
+        context.asn
       )
       .run();
   } catch (error) {

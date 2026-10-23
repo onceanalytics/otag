@@ -207,6 +207,7 @@ One `POST` per event, to `/t`:
 | `d` | hostname the page was served from | always |
 | `r` | referrer | always |
 | `c` | consent state | omitted when no consent command was observed |
+| `w` | `1`: `navigator.webdriver` was true, the browser is driven by a script | omitted otherwise |
 | `b` | event parameters | omitted when the event has none, so never on `page_view` |
 
 Sent with `navigator.sendBeacon`, falling back to `fetch` with `keepalive: true`.

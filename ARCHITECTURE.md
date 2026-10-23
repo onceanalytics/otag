@@ -25,7 +25,9 @@ Two tiers, and only two.
 The **envelope** - `e`, `p`, `d`, `r`, `c` - is how the request is routed. All of
 it is needed before the event name means anything: `d` selects the site, `c`
 decides which identity mode applies. It keeps short keys because it is transport,
-not data.
+not data. `w` rides with it from 0.3.1: `1` when `navigator.webdriver` was
+true. Like `c` it is a fact about the sender, and the worker decides what it
+means (a bot).
 
 **`b`** is what happened, under GA4's parameter names, spelled out. A click's
 `link_url` and a pushed `purchase`'s `value` arrive the same way and are stored

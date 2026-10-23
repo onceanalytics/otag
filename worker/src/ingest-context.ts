@@ -1,6 +1,8 @@
 /**
- * Request context stored per event: in-app browser, city, language and a
- * datacenter flag.
+ * Request context stored per event: in-app browser, city, language, a
+ * datacenter flag and the network (ASN). Also the automation check that
+ * reads the same request: a browser driven by a script, or one claiming to be
+ * something else.
  *
  * This file exists twice, byte for byte: in Once Analytics (src/ingest-context.ts)
  * and in otag (worker/src/ingest-context.ts). Both write the same events table,
@@ -23,6 +25,7 @@ export interface IngestContext {
   city: string | null;
   lang: string | null;
   dc: number | null;
+  asn: number | null;
 }
 
 /**
@@ -113,7 +116,18 @@ export function isDatacenter(cf: CfProperties | undefined): number | null {
   return 0;
 }
 
-/** All four columns for one request. */
+/**
+ * The network the request came from, as Cloudflare's autonomous system number.
+ * Stored next to `dc` so a later, longer list of datacenter networks can be
+ * applied to rows already collected: `dc` is decided once, at ingest. A
+ * network, not a person: every customer of an ISP shares its number.
+ */
+export function asnOf(cf: CfProperties | undefined): number | null {
+  const n = Number(cf?.asn);
+  return cf?.asn !== undefined && Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** All five columns for one request. */
 export function ingestContext(request: Request): IngestContext {
   const cf = (request as unknown as { cf?: CfProperties }).cf;
   return {
@@ -121,5 +135,77 @@ export function ingestContext(request: Request): IngestContext {
     city: typeof cf?.city === 'string' && cf.city ? cf.city : null,
     lang: primaryLanguage(request.headers.get('Accept-Language')),
     dc: isDatacenter(cf),
+    asn: asnOf(cf),
   };
+}
+
+/**
+ * The operating system a user agent names, in the words Sec-CH-UA-Platform
+ * uses. Null when it names none of them.
+ */
+function uaPlatform(ua: string): string | null {
+  if (/Windows NT/.test(ua)) return 'Windows';
+  if (/Android/.test(ua)) return 'Android';
+  if (/iPhone|iPad|iPod/.test(ua)) return 'iOS';
+  if (/Macintosh|Mac OS X/.test(ua)) return 'macOS';
+  if (/CrOS/.test(ua)) return 'Chrome OS';
+  if (/Linux|X11/.test(ua)) return 'Linux';
+  return null;
+}
+
+/** The brands of a Sec-CH-UA header: `"Chromium";v="131"` is Chromium 131. */
+function brands(header: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of header.matchAll(/"([^"]*)"\s*;\s*v\s*=\s*"([^"]*)"/g)) out.set(m[1], m[2]);
+  return out;
+}
+
+/**
+ * A user agent exactly as desktop and Android Chrome, Edge and Opera write it,
+ * which is also the string scripts copy. In-app browsers, WebViews, Samsung
+ * Internet and Chrome on iOS add tokens and do not match, so they are never
+ * judged by the absence of client hints.
+ */
+const PLAIN_CHROMIUM_UA =
+  /^Mozilla\/5\.0 \([^)]*\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/(\d+)[\d.]* (?:Mobile )?Safari\/537\.36(?: (?:Edg|OPR)\/[\d.]+)?$/;
+
+/**
+ * A bot name when the request comes from a browser driven by a script, null
+ * when nothing says so. Each check is about the browser contradicting itself,
+ * so a real person in an ordinary browser never matches:
+ *
+ * - Webdriver: the page reported navigator.webdriver (otag sends `w: 1`).
+ *   Puppeteer, Playwright and Selenium set it unless told not to.
+ * - Headless: Sec-CH-UA lists HeadlessChrome. Old headless Chrome sends it
+ *   even when the script replaced the User-Agent.
+ * - Spoofed UA: the User-Agent says Chrome N but Sec-CH-UA says Chromium M;
+ *   or Sec-CH-UA-Platform names another system than the User-Agent; or the
+ *   User-Agent is a plain Chrome 90+ string and no Sec-CH-UA came at all
+ *   (every Chromium browser sends it to an HTTPS endpoint, which /t always
+ *   is). Chrome on Android asked for the desktop site says Linux in the
+ *   User-Agent and Android in the hint, and is not counted as a mismatch.
+ */
+export function detectAutomation(request: Request, webdriver?: unknown): string | null {
+  if (webdriver === 1 || webdriver === true) return 'Webdriver';
+  const ua = request.headers.get('User-Agent') || '';
+  const ch = request.headers.get('Sec-CH-UA');
+  const b = ch ? brands(ch) : null;
+  if (b?.has('HeadlessChrome')) return 'Headless';
+
+  const chromeMajor = /Chrome\/(\d+)/.exec(ua)?.[1];
+  const chromium = b?.get('Chromium');
+  if (chromeMajor && chromium && chromium !== chromeMajor) return 'Spoofed UA';
+
+  const hinted = request.headers.get('Sec-CH-UA-Platform')?.replace(/"/g, '').trim();
+  const named = uaPlatform(ua);
+  if (hinted && named && hinted !== 'Unknown') {
+    const same = hinted === named
+      || (hinted === 'Chromium OS' && named === 'Chrome OS')
+      || (hinted === 'Android' && named === 'Linux');
+    if (!same) return 'Spoofed UA';
+  }
+
+  const plain = PLAIN_CHROMIUM_UA.exec(ua);
+  if (!ch && plain && Number(plain[1]) >= 90) return 'Spoofed UA';
+  return null;
 }

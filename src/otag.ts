@@ -43,6 +43,9 @@
     // deployed across every site.
     if (referrer) o.r = referrer;
     if (sawConsent) o.c = consent;
+    // A browser driven by Puppeteer, Playwright or Selenium says so. A fact
+    // about the sender, like c; the worker decides it is a bot.
+    if (n.webdriver) o.w = 1;
     if (b) o.b = b;
     const body = JSON.stringify(o);
     // sendBeacon returns false when it refuses the payload (queue full, too

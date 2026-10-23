@@ -26,4 +26,19 @@ assert.equal(m.isDatacenter({ asn: 5617, asOrganization: "Orange Polska Spolka A
 assert.equal(m.isDatacenter({ asn: 13335, asOrganization: "Cloudflare, Inc." }), 0, "WARP and Private Relay are people");
 assert.equal(m.isDatacenter(undefined), null);
 
+assert.equal(m.asnOf({ asn: 5617 }), 5617);
+assert.equal(m.asnOf({}), null);
+assert.equal(m.asnOf(undefined), null);
+
+const req = (h) => new Request("https://oa.example.com/t", { method: "POST", headers: h });
+const CHROME = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const CH = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"';
+assert.equal(m.detectAutomation(req({ "User-Agent": CHROME, "Sec-CH-UA": CH, "Sec-CH-UA-Platform": '"Windows"' })), null);
+assert.equal(m.detectAutomation(req({ "User-Agent": CHROME, "Sec-CH-UA": CH }), 1), "Webdriver");
+assert.equal(m.detectAutomation(req({ "User-Agent": CHROME, "Sec-CH-UA": '"Chromium";v="156", "HeadlessChrome";v="156"' })), "Headless");
+assert.equal(m.detectAutomation(req({ "User-Agent": CHROME, "Sec-CH-UA": '"Chromium";v="156"' })), "Spoofed UA");
+assert.equal(m.detectAutomation(req({ "User-Agent": CHROME, "Sec-CH-UA": CH, "Sec-CH-UA-Platform": '"Linux"' })), "Spoofed UA");
+assert.equal(m.detectAutomation(req({ "User-Agent": CHROME })), "Spoofed UA", "a plain Chrome UA without client hints");
+assert.equal(m.detectAutomation(req({ "User-Agent": FB })), null, "in-app browsers are never judged by missing hints");
+
 console.log("ingest-context: ok");
