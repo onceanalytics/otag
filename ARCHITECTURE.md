@@ -11,11 +11,13 @@ own script URL.
    queued and proxying every later `push` - the original `push` still runs. This
    happens **before** the first `page_view`, so consent defaults already on the
    queue apply to it.
-3. Sends `page_view`.
+3. Sends `page_view`, or, on a page Chrome is prerendering, queues it and
+   everything else until `prerenderingchange`.
 4. Wraps `history.pushState` / `replaceState` and listens for `popstate`.
 5. Listens for clicks, form focus and submits, errors and unhandled
    rejections.
-6. Observes `largest-contentful-paint`, `layout-shift` and `event`, accumulating
+6. Listens, once, for the first trusted input, and sends `engaged`.
+7. Observes `largest-contentful-paint`, `layout-shift` and `event`, accumulating
    Web Vitals for a single report when the page is hidden.
 
 ## Wire format
@@ -27,7 +29,10 @@ it is needed before the event name means anything: `d` selects the site, `c`
 decides which identity mode applies. It keeps short keys because it is transport,
 not data. `w` rides with it from 0.3.1: `1` when `navigator.webdriver` was
 true. Like `c` it is a fact about the sender, and the worker decides what it
-means (a bot).
+means (a bot). `z` joins them in 0.3.2: the browser's time zone, read once per
+page load. The request tells the worker where the network is; this is where the
+device's clock is set, and a zone far from the country is the cheapest proxy
+signal there is. The worker stores it only when it looks like an IANA name.
 
 **`b`** is what happened, under GA4's parameter names, spelled out. A click's
 `link_url` and a pushed `purchase`'s `value` arrive the same way and are stored
@@ -184,6 +189,44 @@ CLS nor INP means anything until the page is finished:
 If none of the three were ever observed, nothing is sent. The report fires at
 most once per page, so a hide/show/hide cycle does not duplicate it.
 
+## Engaged
+
+One `engaged` event per page load, at the first trusted `pointerdown`,
+`touchstart`, `scroll`, `keydown`, or `pointermove` with `pointerType` `mouse`
+(a pen or finger hovering is not a mouse). Capture and passive listeners on
+`window`, removed once it fires. `b.t` is the delay in ms, `b.k` one letter for
+the input (`p`, `t`, `s`, `k`, `m`).
+
+- **Trusted only.** An event a page script dispatches has `isTrusted` false and
+  is ignored. Input a browser driver injects (Puppeteer's `page.mouse`) is
+  trusted, so this is a fact about the page, not proof of a person. A scroll the
+  browser makes itself (restoring a position, jumping to `#anchor`) is trusted
+  too and arrives as `k: "s"` with a small `t`; telling those apart is a
+  reporting decision.
+- **Not sampled**, unlike Web Vitals: one small request, and only on pages
+  someone touched.
+- **No storage.** It is per page load, so an SPA route change does not send
+  another, and a reload does.
+- **The clock starts when the page is first visible**, not when the script ran.
+  A tab opened in the background, or a prerender, can sit for minutes before
+  anyone looks at it, and that wait says nothing about the visitor. Measured
+  from script start it would make every background tab look like a slow
+  reader. Hiding and showing the page again does not restart it.
+
+What it means (a person, a bot that scrolls) is decided by Once Analytics, at
+read time.
+
+## Prerendering
+
+Chrome's speculation rules can load a page before the visitor clicks, and throw
+it away if they never do. otag checks `document.prerendering` in `send`: while it
+is true every event is queued, in order, and the queue goes out on
+`prerenderingchange`. A prerender that is never shown sends nothing, so it is
+not a page view.
+
+A page loaded in a **background tab** is different: someone asked for it, so
+its `page_view` goes at once. Only the engaged clock waits for it to be shown.
+
 ## What the script decides, and why
 
 The script reports; the server stores and interprets. A handful of decisions are
@@ -235,7 +278,11 @@ minimal DOM stub under `node:vm`. It covers the wire format, that no identity is
 ever sent, consent default/update semantics, that the query string and captured text are
 passed through untouched, the SPA path guard, click capture, the form_start /
 form_submit pair and its once-per-form guard, exception reporting, dataLayer
-pass-through, and the Web Vitals accumulation rules above.
+pass-through, the Web Vitals accumulation rules above, the time zone, the
+engaged event (trusted inputs only, once, the clock from first visible) and the
+prerender queue. `test/ingest.mjs` runs the worker's `handleTrack` against a
+fake D1: real `request.cf` shapes with and without `clientTcpRtt`, time zone
+names and junk, and a 0.3.1 payload.
 
 It is not a browser test. Real-browser coverage belongs in Playwright alongside
 it.

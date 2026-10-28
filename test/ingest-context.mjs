@@ -30,6 +30,23 @@ assert.equal(m.asnOf({ asn: 5617 }), 5617);
 assert.equal(m.asnOf({}), null);
 assert.equal(m.asnOf(undefined), null);
 
+// Tier 1a hosting networks (BOT_TRAFFIC_SWEEP.md section 4); tier 1b VPN hosts are not.
+for (const asn of [18779, 262287, 396356, 26832, 44486, 62874, 11798, 214036, 214677, 216139, 212341, 399275, 140577, 7941, 13238, 37963, 132510, 134543])
+  assert.equal(m.isDatacenter({ asn }), 1, String(asn));
+for (const asn of [203020, 207990, 149428, 206092, 208172, 32934, 22295, 62044])
+  assert.equal(m.isDatacenter({ asn }), 0, String(asn));
+
+assert.equal(m.coloOf({ colo: "WAW" }), "WAW");
+assert.equal(m.coloOf({ colo: "waw" }), null);
+assert.equal(m.coloOf({}), null);
+assert.equal(m.rttOf({ clientTcpRtt: 23 }), 20);
+assert.equal(m.rttOf({ clientTcpRtt: 25 }), 30);
+assert.equal(m.rttOf({}), null, "HTTP/3");
+assert.equal(m.rttOf({ clientTcpRtt: 0 }), null);
+assert.equal(m.rttOf(undefined), null);
+for (const z of ["Europe/Warsaw", "America/Argentina/Buenos_Aires", "Etc/GMT+3", "UTC"]) assert.equal(m.timeZoneOf(z), z);
+for (const z of [undefined, "", "Europe/Warsaw'--", "x".repeat(65), 3]) assert.equal(m.timeZoneOf(z), null);
+
 const req = (h) => new Request("https://oa.example.com/t", { method: "POST", headers: h });
 const CHROME = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const CH = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"';

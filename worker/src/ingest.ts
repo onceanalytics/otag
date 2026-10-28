@@ -16,7 +16,7 @@ import {
   detectBot,
   redactSensitiveParams,
 } from './utils';
-import { detectAutomation, ingestContext, storedEventData } from './ingest-context';
+import { detectAutomation, ingestContext, storedEventData, timeZoneOf } from './ingest-context';
 
 const OPT_OUT_COOKIE = 'oa_optout';
 
@@ -38,6 +38,7 @@ interface TrackingPayload {
   r?: string;
   b?: Record<string, unknown>;
   w?: number; // 1 when navigator.webdriver was true
+  z?: string; // the browser's time zone, Europe/Warsaw (0.3.2 on)
 }
 
 /**
@@ -140,8 +141,8 @@ export async function handleTrack(request: Request, env: Env): Promise<Response>
 
   try {
     await env.DB.prepare(
-      `INSERT INTO events (site_id, visitor_hash, event_name, page_path, referrer, country, browser, os, device, is_bot, privacy_mode, utm_source, utm_medium, utm_campaign, utm_term, utm_content, event_data, in_app, city, lang, dc, asn)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO events (site_id, visitor_hash, event_name, page_path, referrer, country, browser, os, device, is_bot, privacy_mode, utm_source, utm_medium, utm_campaign, utm_term, utm_content, event_data, in_app, city, lang, dc, asn, tz, colo, rtt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         siteId,
@@ -166,7 +167,10 @@ export async function handleTrack(request: Request, env: Env): Promise<Response>
         context.city,
         context.lang,
         context.dc,
-        context.asn
+        context.asn,
+        timeZoneOf(payload.z),
+        context.colo,
+        context.rtt
       )
       .run();
   } catch (error) {

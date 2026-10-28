@@ -11,7 +11,7 @@ Comes with a collection endpoint that runs as a Cloudflare Worker and stores raw
 
 Use the button above to get your tracker live (or the wrangler CLI instructions below), and use a SQL client or agent to query your D1 data directly.
 
-Browser JS is about 1.3KB. MIT license.
+Browser JS is about 2KB gzipped. MIT license.
 
 ## Install
 
@@ -82,6 +82,7 @@ The domain has to be on Cloudflare.
 | `form_submit` | form submissions |
 | `exception` | uncaught errors and unhandled promise rejections |
 | `web_vitals` | once, when the page is hidden - LCP, CLS and INP. Sampled at 25% |
+| `engaged` | once per page load, at the first real input: a pointer press, touch, scroll, key, or mouse move. Not sampled |
 | *your own* | anything pushed to `dataLayer`, and `gtag('event', …)` |
 
 Parameters, sent as `b` and stored as JSON in `events.event_data`:
@@ -93,6 +94,7 @@ Parameters, sent as `b` and stored as JSON in `events.event_data`:
 | `form_start`, `form_submit` | `form_id`, `form_name`, `form_destination` |
 | `exception` | `description`, `source`, `stack` |
 | `web_vitals` | `lcp`, `cls`, `inp`, `rate` |
+| `engaged` | `t`: ms from the page first being visible to the input; `k`: which input, `p` pointer press, `t` touch, `s` scroll, `k` key, `m` mouse move |
 | *your own* | whatever you pushed |
 
 Event and parameter names follow GA4's
@@ -103,6 +105,13 @@ Differences are listed in
 
 **Storage:** none. The script does not read or write cookies, `localStorage` or
 `sessionStorage`, and holds no identifier.
+
+**Device facts:** the browser's time zone (`z`, below) and whether `navigator.webdriver`
+is set (`w`). Not the screen size, viewport or pixel ratio.
+
+**Prerendering:** a page Chrome prerenders sends nothing until it is shown; a
+prerender nobody opens sends nothing at all. A page opened in a background tab
+sends its `page_view` at once.
 
 **Text capture:** element text is sent as-is, truncated at 50 characters. Redaction is
 server-side.
@@ -140,7 +149,8 @@ visitor_hash = SHA-256(ip | user-agent | site_id | date | salt), first 16 hex ch
 ### Schema
 
 Two tables, defined in `worker/migrations/` (`0001_init.sql`, then `0002_request_context.sql`
-adds the last four columns). One index:
+adds `in_app`, `city`, `lang` and `dc`, `0003_asn.sql` adds `asn` and `0004_tz_colo_rtt.sql`
+adds `tz`, `colo` and `rtt`). One index:
 `idx_events_site_created (site_id, created_at)`. `meta` holds a single row, `hash_salt`.
 
 `events`:
@@ -164,6 +174,10 @@ adds the last four columns). One index:
 | `city` | Cloudflare's `request.cf.city` |
 | `lang` | primary subtag of the first `Accept-Language` entry, lowercase (`pl`). Null when the header is missing |
 | `dc` | `1` when the request came from a cloud or hosting network (a short ASN list, see `worker/src/ingest-context.ts`), `0` when not, null when Cloudflare gave no network data |
+| `asn` | Cloudflare's `request.cf.asn`, the network's number, so `dc` can be recomputed later |
+| `tz` | the browser's time zone as the script reports it (`Europe/Warsaw`). Null when absent or not a zone name |
+| `colo` | Cloudflare's `request.cf.colo`, the data center that took the request (`WAW`) |
+| `rtt` | Cloudflare's `request.cf.clientTcpRtt` in ms, rounded to 10. Null when there is none, which is common on HTTP/3 |
 
 ### Querying
 
@@ -208,6 +222,7 @@ One `POST` per event, to `/t`:
 | `r` | referrer | always |
 | `c` | consent state | omitted when no consent command was observed |
 | `w` | `1`: `navigator.webdriver` was true, the browser is driven by a script | omitted otherwise |
+| `z` | the browser's time zone, `Intl.DateTimeFormat().resolvedOptions().timeZone` | omitted when the browser gives none |
 | `b` | event parameters | omitted when the event has none, so never on `page_view` |
 
 Sent with `navigator.sendBeacon`, falling back to `fetch` with `keepalive: true`.

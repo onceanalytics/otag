@@ -1,13 +1,15 @@
 /**
  * Request context stored per event: in-app browser, city, language, a
- * datacenter flag and the network (ASN). Also the automation check that
+ * datacenter flag, the network (ASN), the Cloudflare data center and the
+ * connection's round-trip time. Also the time zone otag reports, checked
+ * here so both workers accept the same values. Also the automation check that
  * reads the same request: a browser driven by a script, or one claiming to be
  * something else. And the one rule both apply to a click's parameters before
  * they are stored: link_url loses its query string and fragment.
  *
  * This file exists twice, byte for byte: in Once Analytics (src/ingest-context.ts)
  * and in otag (worker/src/ingest-context.ts). Both write the same events table,
- * so both must derive these four columns the same way. A test in Once Analytics
+ * so both must derive these columns the same way. A test in Once Analytics
  * compares the two copies.
  *
  * The raw user agent is never stored. Only what is derived from it here (an app
@@ -19,6 +21,8 @@ export interface CfProperties {
   city?: string;
   asn?: number;
   asOrganization?: string;
+  colo?: string;
+  clientTcpRtt?: number;
 }
 
 export interface IngestContext {
@@ -27,6 +31,8 @@ export interface IngestContext {
   lang: string | null;
   dc: number | null;
   asn: number | null;
+  colo: string | null;
+  rtt: number | null;
 }
 
 /**
@@ -105,6 +111,25 @@ const DATACENTER_ASNS = new Set<number>([
   212238,                // Datacamp (CDN77)
   46664,                 // VolumeDrive
   36352,                 // ColoCrossing
+  // Bare-metal, VPS and crawler networks seen sending machine traffic
+  // (BOT_TRAFFIC_SWEEP.md, tier 1a). A VPN or remote desktop hosted there
+  // is possible; asn is stored, so an entry can be taken out later.
+  18779,                 // EGIHosting
+  262287, 396356,        // Latitude.sh
+  26832,                 // Rica Web Services
+  44486,                 // Synlinq
+  62874,                 // Web2Objects
+  11798,                 // Ace Data Centers
+  214036,                // Ultahost
+  214677,                // DeluxHost
+  216139,                // Ironhost
+  212341,                // CSN-Datacenters
+  399275,                // Solid Systems
+  140577,                // Ahrefs
+  7941,                  // Internet Archive
+  13238,                 // Yandex
+  37963,                 // Alibaba (China)
+  132510, 134543,        // China Mobile / China Unicom IDC
 ]);
 
 const DATACENTER_ORGS =
@@ -128,7 +153,40 @@ export function asnOf(cf: CfProperties | undefined): number | null {
   return cf?.asn !== undefined && Number.isInteger(n) && n > 0 ? n : null;
 }
 
-/** All five columns for one request. */
+/**
+ * The Cloudflare data center that took the request, as its three-letter
+ * airport code (WAW, FRA). One far from the visitor's country points to a
+ * proxy or tunnel.
+ */
+export function coloOf(cf: CfProperties | undefined): string | null {
+  return typeof cf?.colo === 'string' && /^[A-Z]{3}$/.test(cf.colo) ? cf.colo : null;
+}
+
+/**
+ * The TCP round-trip time between the visitor and that data center, rounded
+ * to 10 ms: coarse enough to say near or far, nothing finer. Null when
+ * Cloudflare has none, which is common: an HTTP/3 (QUIC) connection is not
+ * TCP and often has no value, or 0, which is treated as none too.
+ */
+export function rttOf(cf: CfProperties | undefined): number | null {
+  const ms = cf?.clientTcpRtt;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? Math.round(ms / 10) * 10 : null;
+}
+
+/**
+ * The time zone otag reports (`z`), as the browser named it: Europe/Warsaw,
+ * America/Argentina/Buenos_Aires, Etc/GMT+3, UTC. Anything that does not look
+ * like an IANA zone name, or is longer than 64 characters, is null. The name
+ * is not checked against a zone list: a browser newer than this file may
+ * know a zone it does not.
+ */
+export function timeZoneOf(z: unknown): string | null {
+  return typeof z === 'string' && z.length <= 64 && /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(z)
+    ? z
+    : null;
+}
+
+/** All seven columns for one request. */
 export function ingestContext(request: Request): IngestContext {
   const cf = (request as unknown as { cf?: CfProperties }).cf;
   return {
@@ -137,6 +195,8 @@ export function ingestContext(request: Request): IngestContext {
     lang: primaryLanguage(request.headers.get('Accept-Language')),
     dc: isDatacenter(cf),
     asn: asnOf(cf),
+    colo: coloOf(cf),
+    rtt: rttOf(cf),
   };
 }
 

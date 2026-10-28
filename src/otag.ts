@@ -31,12 +31,37 @@
     }
   }
 
+  // The browser's time zone, an IANA name like Europe/Warsaw. Constant for the
+  // page load, so read once. A fact about the device, like w: the request says
+  // where the network is, this says where the clock is set, and the worker
+  // only checks that it looks like a zone name.
+  let zone: string | undefined;
+  try {
+    zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {}
+
+  // ── Prerender ──
+  // A page Chrome prerenders from speculation rules runs this script before
+  // anyone opens it, and it may never be shown. Nothing is sent until it is
+  // (prerenderingchange); a prerender that is thrown away sends nothing. What
+  // was queued meanwhile goes out in order, page_view first.
+  const prerendering = () => (d as any).prerendering === true;
+  const queued: Array<[string, Record<string, unknown> | undefined]> = [];
+  d.addEventListener("prerenderingchange", function () {
+    clock();
+    for (const q of queued.splice(0)) send(q[0], q[1]);
+  });
+
   // ── Send ──
   // Two tiers, and only two. The envelope - e, p, d, r, c - is how the request
   // is routed: the server needs all of it before it knows what the event is,
   // because d picks the site and c decides the identity. b is what happened,
   // under GA4's parameter names.
   function send(e: string, b?: Record<string, unknown>) {
+    if (prerendering()) {
+      queued.push([e, b]);
+      return;
+    }
     const o: Record<string, unknown> = { e, p: location.pathname + location.search, d: location.hostname };
     // Sent on every event. It is constant for the page load, and deciding which
     // event should carry it is a server decision, not one to bake into a script
@@ -46,6 +71,7 @@
     // A browser driven by Puppeteer, Playwright or Selenium says so. A fact
     // about the sender, like c; the worker decides it is a bot.
     if (n.webdriver) o.w = 1;
+    if (zone) o.z = zone;
     if (b) o.b = b;
     const body = JSON.stringify(o);
     // sendBeacon returns false when it refuses the payload (queue full, too
@@ -122,6 +148,38 @@
     return r;
   };
   w.addEventListener("popstate", nav);
+
+  // ── Engaged ──
+  // The first sign of a person on the page: a pointer press, a touch, a scroll,
+  // a key, or a mouse moving (pointerType mouse: a pen or finger hovering is
+  // not one). Sent once per page load, unsampled, then the listeners go.
+  // b.t is how long after the page was first visible it came, in ms; b.k
+  // which it was. Only trusted events count: one a page script dispatches has
+  // isTrusted false. A fact, like w; what it says about the visit is Once
+  // Analytics' decision. Nothing is kept on the device, so an SPA route change
+  // does not send another.
+  //
+  // The clock starts when the page is first visible, not when the script ran:
+  // a tab opened in the background, or a prerender, can wait minutes before
+  // anyone looks at it, and that wait is not the visitor's. The page view is
+  // still sent at once from a background tab: the page was asked for.
+  let shown = -1;
+  function clock() {
+    if (shown < 0 && d.visibilityState === "visible" && !prerendering()) shown = performance.now();
+  }
+  clock();
+  d.addEventListener("visibilitychange", clock);
+
+  const KINDS: Record<string, string> = { pointerdown: "p", touchstart: "t", scroll: "s", keydown: "k", pointermove: "m" };
+  const LISTEN = { capture: true, passive: true };
+  function engaged(ev: any) {
+    if (!ev.isTrusted || (ev.type === "pointermove" && ev.pointerType !== "mouse")) return;
+    for (const k in KINDS) w.removeEventListener(k, engaged, LISTEN);
+    clock();
+    // Hidden and never shown (no trusted input should reach such a page): 0.
+    send("engaged", { t: shown < 0 ? 0 : Math.round(performance.now() - shown), k: KINDS[ev.type] });
+  }
+  for (const k in KINDS) w.addEventListener(k, engaged, LISTEN);
 
   // ── Clicks on interactive elements ──
   // GA4 fires click on outbound links only; this one fires on any interactive

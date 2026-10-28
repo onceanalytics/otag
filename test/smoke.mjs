@@ -23,11 +23,31 @@ function mathWith(random) {
   return m;
 }
 
+/** Intl as the vm context sees it, with a fixed time zone (or one that throws). */
+function intlWith(tz) {
+  const i = Object.create(Intl);
+  i.DateTimeFormat = function () {
+    if (tz instanceof Error) throw tz;
+    return { resolvedOptions: () => ({ timeZone: tz }) };
+  };
+  return i;
+}
+
 function run(opts = {}) {
   const { path = "/pricing", search = "", dataLayer = [] } = opts;
   const sent = [];
+  // handlers.<target>.<type>(ev) calls every listener added for it, in order.
+  const listeners = { document: {}, window: {} };
   const handlers = { document: {}, window: {} };
+  const listen = (target) => (t, fn) => {
+    (listeners[target][t] ??= []).push(fn);
+    handlers[target][t] = (ev) => { for (const f of [...listeners[target][t]]) f(ev); };
+  };
+  const unlisten = (target) => (t, fn) => {
+    listeners[target][t] = (listeners[target][t] || []).filter((f) => f !== fn);
+  };
   const noop = () => {};
+  const clock = { now: opts.now ?? 0 };
 
   const location = {
     pathname: path, search, hostname: "site.test",
@@ -39,8 +59,10 @@ function run(opts = {}) {
     currentScript: { dataset: {}, src: "https://w.test/script.js" },
     referrer: "https://news.ycombinator.com/",
     title: "Pricing",
-    visibilityState: "visible",
-    addEventListener: (t, fn) => (handlers.document[t] = fn),
+    visibilityState: opts.visibility ?? "visible",
+    prerendering: opts.prerendering ?? false,
+    addEventListener: listen("document"),
+    removeEventListener: unlisten("document"),
   };
 
   class PerformanceObserverStub {
@@ -51,8 +73,11 @@ function run(opts = {}) {
   const win = {
     dataLayer, location, document: doc,
     history: { pushState: noop, replaceState: noop },
-    navigator: { sendBeacon: (_u, b) => (sent.push(JSON.parse(b)), true) },
-    addEventListener: (t, fn) => (handlers.window[t] = fn),
+    navigator: { sendBeacon: (_u, b) => (sent.push(JSON.parse(b)), true), webdriver: opts.webdriver },
+    addEventListener: listen("window"),
+    removeEventListener: unlisten("window"),
+    performance: { now: () => clock.now },
+    Intl: intlWith("tz" in opts ? opts.tz : "Europe/Warsaw"),
     PerformanceObserver: PerformanceObserverStub,
     Math: mathWith(opts.random ?? 0),
     URL, URLSearchParams, JSON, Object, Array, console, Buffer,
@@ -63,7 +88,7 @@ function run(opts = {}) {
   vm.runInContext(SCRIPT, win);
 
   return {
-    sent, win, location, handlers,
+    sent, win, location, handlers, listeners, clock,
     click: (target) => handlers.document.click?.({ target }),
     submit: (target) => handlers.document.submit?.({ target }),
     focusin: (target) => handlers.document.focusin?.({ target }),
@@ -73,6 +98,9 @@ function run(opts = {}) {
     emit: (type, entries) => observers[type]?.({ getEntries: () => entries }),
     hide: () => { doc.visibilityState = "hidden"; handlers.document.visibilitychange?.(); },
     show: () => { doc.visibilityState = "visible"; handlers.document.visibilitychange?.(); },
+    activate: () => { doc.prerendering = false; handlers.document.prerenderingchange?.(); },
+    // A real input event, or one a page script made (isTrusted false).
+    input: (type, props = {}) => handlers.window[type]?.({ type, isTrusted: true, ...props }),
   };
 }
 
@@ -88,7 +116,7 @@ check("page_view is the envelope, and nothing else", () => {
   const { sent } = run();
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0], {
-    e: "page_view", p: "/pricing", d: "site.test", r: "https://news.ycombinator.com/",
+    e: "page_view", p: "/pricing", d: "site.test", r: "https://news.ycombinator.com/", z: "Europe/Warsaw",
   }, "no b: a page view has no parameters of its own");
 });
 
@@ -98,7 +126,7 @@ check("the envelope keys are the same on every event", () => {
   r.win.dataLayer.push({ event: "purchase", value: 99 });
   for (const b of r.sent)
     assert.deepEqual(
-      Object.keys(b).filter((k) => k !== "b").sort(), ["d", "e", "p", "r"],
+      Object.keys(b).filter((k) => k !== "b").sort(), ["d", "e", "p", "r", "z"],
       `${b.e} must carry the same envelope`);
 });
 
@@ -604,6 +632,150 @@ check("nothing sent when no vitals were observed", () => {
   const r = run();
   r.hide();
   assert.equal(r.sent.filter((x) => x.e === "web_vitals").length, 0);
+});
+
+console.log("time zone");
+
+for (const tz of ["Europe/Warsaw", "America/Argentina/Buenos_Aires", "Etc/GMT+3", "UTC"]) {
+  check(`z is the browser's zone as it reports it: ${tz}`, () => {
+    const r = run({ tz });
+    r.click(el({ tagName: "BUTTON", id: "b" }));
+    for (const e of r.sent) assert.equal(e.z, tz, `${e.e} must carry z`);
+  });
+}
+
+check("no zone (undefined) means no z", () => {
+  assert.equal("z" in run({ tz: undefined }).sent[0], false);
+});
+
+check("Intl throwing costs the zone, not the page view", () => {
+  const { sent } = run({ tz: new RangeError("Incorrect locale information provided") });
+  assert.equal(sent[0].e, "page_view");
+  assert.equal("z" in sent[0], false);
+});
+
+check("navigator.webdriver still rides the envelope next to it", () => {
+  assert.equal(run({ webdriver: true }).sent[0].w, 1);
+});
+
+console.log("engaged");
+
+const engagedOf = (r) => r.sent.filter((x) => x.e === "engaged");
+
+check("nothing without an interaction", () => {
+  const r = run();
+  r.clock.now = 60000;
+  r.hide();
+  r.click(el({ tagName: "BUTTON", id: "b" }));
+  assert.equal(engagedOf(r).length, 0, "a click event alone (el.click() from a script) is not an input");
+});
+
+for (const [type, props, k] of [
+  ["scroll", {}, "s"],
+  ["touchstart", {}, "t"],
+  ["pointermove", { pointerType: "mouse" }, "m"],
+  ["pointerdown", { pointerType: "touch" }, "p"],
+  ["keydown", { key: "Tab" }, "k"],
+]) {
+  check(`a trusted ${type} sends it once, with t and k = ${k}`, () => {
+    const r = run();
+    r.clock.now = 1234.6;
+    r.input(type, props);
+    r.input(type, props);
+    r.input("scroll");
+    const e = engagedOf(r);
+    assert.equal(e.length, 1);
+    assert.deepEqual(e[0].b, { t: 1235, k });
+    assert.equal(e[0].z, "Europe/Warsaw", "the envelope as on every event");
+  });
+}
+
+check("the listeners are removed after it fires", () => {
+  const r = run();
+  r.input("touchstart");
+  for (const t of ["pointerdown", "touchstart", "scroll", "keydown", "pointermove"])
+    assert.equal((r.listeners.window[t] || []).length, 0, `${t} still listened to`);
+});
+
+check("synthetic events (isTrusted false) never count", () => {
+  const r = run();
+  for (const t of ["pointerdown", "touchstart", "scroll", "keydown"]) r.input(t, { isTrusted: false });
+  r.input("pointermove", { pointerType: "mouse", isTrusted: false });
+  assert.equal(engagedOf(r).length, 0);
+  r.input("scroll");
+  assert.equal(engagedOf(r).length, 1, "and they do not use it up");
+});
+
+check("a pen or finger hovering is not a mouse move", () => {
+  const r = run();
+  r.input("pointermove", { pointerType: "touch" });
+  r.input("pointermove", { pointerType: "pen" });
+  assert.equal(engagedOf(r).length, 0);
+  r.input("pointermove", { pointerType: "mouse" });
+  assert.equal(engagedOf(r).at(-1).b.k, "m");
+});
+
+check("an SPA route change does not send another", () => {
+  const r = run();
+  r.input("scroll");
+  r.goto("/docs");
+  r.input("scroll");
+  assert.equal(engagedOf(r).length, 1);
+});
+
+check("not sampled: sent where vitals are not", () => {
+  const r = run({ random: 0.99 });
+  r.input("keydown");
+  assert.equal(engagedOf(r).length, 1);
+});
+
+check("a background tab: page_view at once, t counted from first visible", () => {
+  const r = run({ visibility: "hidden" });
+  assert.equal(r.sent[0].e, "page_view", "the page was asked for, so it is counted");
+  r.clock.now = 90000;
+  r.show();
+  r.clock.now = 92500;
+  r.input("pointermove", { pointerType: "mouse" });
+  assert.deepEqual(engagedOf(r)[0].b, { t: 2500, k: "m" });
+});
+
+check("hidden and shown again: the clock is not restarted", () => {
+  const r = run({ now: 100 });
+  r.clock.now = 5000; r.hide();
+  r.clock.now = 9000; r.show();
+  r.input("scroll");
+  assert.equal(engagedOf(r)[0].b.t, 8900);
+});
+
+console.log("prerender");
+
+check("nothing is sent while prerendering", () => {
+  const r = run({ prerendering: true, dataLayer: [{ event: "purchase", value: 1 }] });
+  r.error({ message: "x" });
+  assert.equal(r.sent.length, 0);
+});
+
+check("activation sends the queue in order, page_view included", () => {
+  const r = run({ prerendering: true, dataLayer: [{ event: "purchase", value: 1 }] });
+  r.activate();
+  assert.deepEqual(r.sent.map((x) => x.e), ["purchase", "page_view"]);
+  r.activate();
+  assert.equal(r.sent.length, 2, "a second prerenderingchange sends nothing twice");
+});
+
+check("a prerender never activated sends nothing", () => {
+  const r = run({ prerendering: true });
+  r.clock.now = 1e6;
+  assert.equal(r.sent.length, 0);
+});
+
+check("engaged t starts at activation, not at prerender", () => {
+  const r = run({ prerendering: true, now: 50 });
+  r.clock.now = 30000;
+  r.activate();
+  r.clock.now = 31200;
+  r.input("touchstart");
+  assert.deepEqual(engagedOf(r)[0].b, { t: 1200, k: "t" });
 });
 
 process.exit(failures ? 1 : 0);
